@@ -568,3 +568,58 @@ input::placeholder {
 .chat-disclaimer {
   color: #71717a;
 }
+
+.mock-notice {
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border: 1px solid #f0d29b;
+  border-radius: 9px;
+  background: #fff8eb;
+  color: #80551b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.video-title {
+  margin: 16px 0 8px;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.selected-video > .video-link {
+  display: inline-block;
+  margin-top: 12px;
+}
+
+.transcript-preview {
+  margin-top: 22px;
+  border-top: 1px solid #e4e4e7;
+  padding-top: 16px;
+}
+
+.transcript-preview summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcript-segment {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 14px;
+}
+
+.transcript-segment a {
+  color: #c62828;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.transcript-segment p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #52525b;
+}

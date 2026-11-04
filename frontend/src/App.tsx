@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { checkHealth, processVideo } from "./services/api";
+import type { ProcessVideoResponse } from "./types/api";
 import "./App.css";
 
 type Message = {
@@ -8,59 +10,122 @@ type Message = {
   text: string;
 };
 
-function getYouTubeVideoId(value: string): string | null {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
-    let videoId: string | null = null;
+type ConnectionStatus = "checking" | "connected" | "unavailable";
 
-    if (hostname === "youtu.be") {
-      videoId = url.pathname.split("/")[1];
-    } else if (
-      ["youtube.com", "www.youtube.com", "m.youtube.com"].includes(hostname)
-    ) {
-      const parts = url.pathname.split("/").filter(Boolean);
+function formatTimestamp(seconds: number): string {
+  const totalSeconds = Math.floor(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
 
-      if (url.pathname === "/watch") {
-        videoId = url.searchParams.get("v");
-      } else if (["shorts", "embed", "live"].includes(parts[0])) {
-        videoId = parts[1];
-      }
-    }
-
-    if (!["https:", "http:"].includes(url.protocol)) {
-      return null;
-    }
-
-    return videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)
-      ? videoId
-      : null;
-  } catch {
-    return null;
-  }
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function App() {
   const [videoUrl, setVideoUrl] = useState("");
-  const [videoId, setVideoId] = useState<string | null>(null);
+  const [processedVideo, setProcessedVideo] =
+    useState<ProcessVideoResponse | null>(null);
+
   const [error, setError] = useState("");
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>("checking");
+
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
 
-  function handleLoadVideo(event: FormEvent<HTMLFormElement>) {
+  const videoRequestRef = useRef<AbortController | null>(null);
+  const videoRequestIdRef = useRef(0);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const video = processedVideo?.video ?? null;
+  const isMock = processedVideo?.mode === "mock";
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    checkHealth(controller.signal)
+      .then(() => {
+        if (!controller.signal.aborted) {
+          setConnectionStatus("connected");
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setConnectionStatus("unavailable");
+        }
+      });
+
+    return () => {
+      controller.abort();
+      videoRequestRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    }
+  }, [messages]);
+
+  async function handleLoadVideo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const extractedId = getYouTubeVideoId(videoUrl.trim());
+    const url = videoUrl.trim();
 
-    if (!extractedId) {
-      setError("Enter a valid YouTube video link.");
+    if (!url || isVideoLoading) {
       return;
     }
 
+    videoRequestRef.current?.abort();
+
+    const controller = new AbortController();
+    videoRequestRef.current = controller;
+
+    const requestId = ++videoRequestIdRef.current;
+
+    setIsVideoLoading(true);
     setError("");
-    setVideoId(extractedId);
+    setProcessedVideo(null);
     setMessages([]);
     setQuestion("");
+    setThumbnailFailed(false);
+
+    try {
+      const result = await processVideo(url, controller.signal);
+
+      if (
+        controller.signal.aborted ||
+        requestId !== videoRequestIdRef.current
+      ) {
+        return;
+      }
+
+      setProcessedVideo(result);
+      setConnectionStatus("connected");
+    } catch (requestError) {
+      if (
+        controller.signal.aborted ||
+        requestId !== videoRequestIdRef.current
+      ) {
+        return;
+      }
+
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to process the video. Please try again.",
+      );
+    } finally {
+      if (requestId === videoRequestIdRef.current) {
+        setIsVideoLoading(false);
+        videoRequestRef.current = null;
+      }
+    }
   }
 
   function handleSendQuestion(event: FormEvent<HTMLFormElement>) {
@@ -68,7 +133,7 @@ function App() {
 
     const text = question.trim();
 
-    if (!text || !videoId) {
+    if (!text || !video || isVideoLoading) {
       return;
     }
 
@@ -82,7 +147,7 @@ function App() {
       {
         id: previous.length + 2,
         role: "assistant",
-        text: "Your question is ready. AI answers will be available once the backend is connected.",
+        text: "This is a frontend placeholder. The chat API is not connected yet, so no question has been sent to the backend.",
       },
     ]);
 
@@ -90,12 +155,25 @@ function App() {
   }
 
   function handleReset() {
+    videoRequestRef.current?.abort();
+    videoRequestRef.current = null;
+    videoRequestIdRef.current += 1;
+
     setVideoUrl("");
-    setVideoId(null);
+    setProcessedVideo(null);
     setError("");
     setQuestion("");
     setMessages([]);
+    setIsVideoLoading(false);
+    setThumbnailFailed(false);
   }
+
+  const connectionLabel =
+    connectionStatus === "checking"
+      ? "Checking backend..."
+      : connectionStatus === "connected"
+        ? "Backend connected · Mock mode"
+        : "Backend unavailable";
 
   return (
     <div className="app-layout">
@@ -114,7 +192,11 @@ function App() {
           Turn video content into clear answers.
         </p>
 
-        <button className="new-session-button" onClick={handleReset}>
+        <button
+          className="new-session-button"
+          type="button"
+          onClick={handleReset}
+        >
           + New session
         </button>
 
@@ -123,9 +205,21 @@ function App() {
           <div className="workspace-item">Video assistant</div>
         </div>
 
-        <div className="sidebar-footer">
-          <span className="status-dot" />
-          Frontend preview
+        <div className="sidebar-footer" role="status">
+          <span
+            className="status-dot"
+            aria-hidden="true"
+            style={{
+              backgroundColor:
+                connectionStatus === "connected"
+                  ? "#287754"
+                  : connectionStatus === "checking"
+                    ? "#b7791f"
+                    : "#e53935",
+            }}
+          />
+
+          {connectionLabel}
         </div>
       </aside>
 
@@ -133,17 +227,22 @@ function App() {
         <header className="page-header">
           <div>
             <p className="eyebrow">YOUR VIDEO LEARNING COMPANION</p>
-            <h1>Watch less. Understand more.</h1>
+
+            <h1>Your videos. Clearer answers.</h1>
+
             <p className="page-description">
               Add a YouTube video, ask questions, and explore its key ideas.
             </p>
           </div>
 
-          <span className="preview-badge">Preview</span>
+          <span className="preview-badge">Mock API preview</span>
         </header>
 
-        <section className="panel video-input-panel">
-          <h2>Start with a video</h2>
+        <section
+          className="panel video-input-panel"
+          aria-labelledby="video-input-heading"
+        >
+          <h2 id="video-input-heading">Start with a video</h2>
 
           <form onSubmit={handleLoadVideo}>
             <label htmlFor="video-url">YouTube video link</label>
@@ -155,13 +254,18 @@ function App() {
                 placeholder="https://www.youtube.com/watch?v=..."
                 value={videoUrl}
                 onChange={(event) => setVideoUrl(event.target.value)}
+                disabled={isVideoLoading}
                 aria-invalid={Boolean(error)}
                 aria-describedby={error ? "video-error" : "video-help"}
                 required
               />
 
-              <button className="primary-button" type="submit">
-                Analyze video
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={isVideoLoading || !videoUrl.trim()}
+              >
+                {isVideoLoading ? "Processing..." : "Analyse video"}
               </button>
             </div>
 
@@ -178,52 +282,131 @@ function App() {
         </section>
 
         <div className="workspace-grid">
-          <section className="panel video-panel">
+          <section
+            className="panel video-panel"
+            aria-labelledby="video-heading"
+            aria-busy={isVideoLoading}
+          >
             <div className="panel-heading">
-              <h2>Your video</h2>
-              {videoId && <span className="selected-badge">Selected</span>}
+              <h2 id="video-heading">Your video</h2>
+
+              {video && (
+                <span className="selected-badge">
+                  {isMock ? "Demo ready" : "Ready"}
+                </span>
+              )}
             </div>
 
-            {videoId ? (
-              <div className="selected-video">
-                <img
-                  className="video-thumbnail"
-                  src={`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`}
-                  alt="Selected YouTube video thumbnail"
-                />
+            {isVideoLoading ? (
+              <div className="empty-state" role="status">
+                <span className="empty-icon" aria-hidden="true">
+                  ▶
+                </span>
 
-                <p className="video-id">Video ID: {videoId}</p>
+                <h3>Processing your video</h3>
+
+                <p>Waiting for the backend response...</p>
+              </div>
+            ) : video && processedVideo ? (
+              <div className="selected-video">
+                {isMock && (
+                  <p className="mock-notice" role="note">
+                    Mock / simulated content: the title, duration,
+                    transcript, and answers are demo data. They do not
+                    describe the linked video. Demo timestamps are for
+                    interaction testing only.
+                  </p>
+                )}
+
+                {!thumbnailFailed ? (
+                  <img
+                    className="video-thumbnail"
+                    src={video.thumbnail_url}
+                    alt="Thumbnail of the linked YouTube video"
+                    onError={() => setThumbnailFailed(true)}
+                  />
+                ) : (
+                  <div className="empty-state">
+                    <p>Thumbnail unavailable. You can still open the video.</p>
+                  </div>
+                )}
+
+                <h3 className="video-title">
+                  {video.title ?? "Untitled video"}
+                </h3>
+
+                {video.duration_seconds !== null && (
+                  <p className="helper-text">
+                    {isMock ? "Simulated duration" : "Duration"}:{" "}
+                    {formatTimestamp(video.duration_seconds)}
+                  </p>
+                )}
 
                 <a
                   className="video-link"
-                  href={`https://www.youtube.com/watch?v=${videoId}`}
+                  href={video.url}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Open video on YouTube ↗
+                  Open actual video on YouTube ↗
                 </a>
 
-                <p className="helper-text">
-                  Transcript processing will be added when the backend is
-                  connected.
-                </p>
+                <details className="transcript-preview">
+                  <summary>
+                    {isMock ? "Simulated transcript" : "Transcript"}
+                  </summary>
+
+                  {processedVideo.transcript.length === 0 ? (
+                    <p className="helper-text">
+                      No transcript segments were returned.
+                    </p>
+                  ) : (
+                    processedVideo.transcript.map((segment, index) => (
+                      <div className="transcript-segment" key={index}>
+                        <a
+                          href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(
+                            segment.start_seconds,
+                          )}s`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`Open video at ${formatTimestamp(
+                            segment.start_seconds,
+                          )}${isMock ? "; simulated source timestamp" : ""}`}
+                        >
+                          {formatTimestamp(segment.start_seconds)}
+                        </a>
+
+                        <p>{segment.text}</p>
+                      </div>
+                    ))
+                  )}
+                </details>
               </div>
             ) : (
               <div className="empty-state">
                 <span className="empty-icon" aria-hidden="true">
                   ▶
                 </span>
+
                 <h3>Your next discovery starts here</h3>
+
                 <p>Paste a YouTube link above to select a video.</p>
               </div>
             )}
           </section>
 
-          <section className="panel chat-panel">
+          <section
+            className="panel chat-panel"
+            aria-labelledby="chat-heading"
+          >
             <div className="panel-heading">
-              <h2>Ask VideoWise</h2>
+              <h2 id="chat-heading">Ask VideoWise</h2>
               <span className="chat-label">Video Q&amp;A</span>
             </div>
+
+            <p className="helper-text">
+              Frontend preview: chat responses are placeholders.
+            </p>
 
             <div
               className="messages"
@@ -236,11 +419,13 @@ function App() {
                   <span className="chat-symbol" aria-hidden="true">
                     ✦
                   </span>
+
                   <h3>Make the video make sense</h3>
+
                   <p>
-                    {videoId
-                      ? "Try typing a question about your selected video."
-                      : "Select a video to start asking questions."}
+                    {video
+                      ? "Try typing a question to preview the chat layout."
+                      : "Process a video to start previewing the chat."}
                   </p>
                 </div>
               ) : (
@@ -250,15 +435,23 @@ function App() {
                     className={`message message-${message.role}`}
                   >
                     <span className="message-author">
-                      {message.role === "user" ? "You" : "VideoWise AI"}
+                      {message.role === "user"
+                        ? "You"
+                        : "VideoWise AI · Preview"}
                     </span>
+
                     <p>{message.text}</p>
                   </article>
                 ))
               )}
+
+              <div ref={messagesEndRef} />
             </div>
 
-            <form className="question-form" onSubmit={handleSendQuestion}>
+            <form
+              className="question-form"
+              onSubmit={handleSendQuestion}
+            >
               <label className="sr-only" htmlFor="question">
                 Your question
               </label>
@@ -267,25 +460,29 @@ function App() {
                 id="question"
                 type="text"
                 placeholder={
-                  videoId ? "Ask about this video..." : "Select a video first"
+                  video
+                    ? "Ask about this video..."
+                    : "Process a video first"
                 }
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
-                disabled={!videoId}
+                disabled={!video || isVideoLoading}
                 maxLength={2000}
               />
 
               <button
                 className="primary-button"
                 type="submit"
-                disabled={!videoId || !question.trim()}
+                disabled={
+                  !video || isVideoLoading || !question.trim()
+                }
               >
                 Send
               </button>
             </form>
 
             <p className="chat-disclaimer">
-              Preview mode: responses are placeholders.
+              Chat API integration is the next milestone.
             </p>
           </section>
         </div>
