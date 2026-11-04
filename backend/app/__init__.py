@@ -1,0 +1,1 @@
+"""VideoWise AI mock backend."""
