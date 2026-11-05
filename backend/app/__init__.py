@@ -1,1 +1,1 @@
-"""VideoWise AI mock backend."""
+"""tubeInsight-ai backend: real captions and mock chat."""

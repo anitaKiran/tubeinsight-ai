@@ -4,9 +4,13 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from requests import Timeout
+from youtube_transcript_api import (
+    AgeRestricted, IpBlocked, RequestBlocked, TranscriptsDisabled, VideoUnavailable,
+)
 
 from app.main import DEFAULT_CORS_ORIGINS, create_app
-from app.services import mock_chat_service, mock_video_service
+from app.services import mock_chat_service, video_service
 
 VIDEO_ID = "dQw4w9WgXcQ"
 OTHER_VIDEO_ID = "abcdefghijk"
@@ -14,13 +18,13 @@ VIDEO_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, caption_api):
     monkeypatch.setenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
-    mock_video_service.processed_videos.clear()
+    video_service.processed_videos.clear()
     mock_chat_service.conversations.clear()
     with TestClient(create_app(), raise_server_exceptions=False) as test_client:
         yield test_client
-    mock_video_service.processed_videos.clear()
+    video_service.processed_videos.clear()
     mock_chat_service.conversations.clear()
 
 
@@ -72,10 +76,10 @@ def test_supported_video_urls(client, url):
     assert response.status_code == 200
     assert response.json()["video"] == {
         "id": VIDEO_ID,
-        "title": "VideoWise AI Demo Video",
+        "title": None,
         "url": VIDEO_URL,
         "thumbnail_url": f"https://img.youtube.com/vi/{VIDEO_ID}/hqdefault.jpg",
-        "duration_seconds": 300,
+        "duration_seconds": None,
     }
 
 
@@ -105,31 +109,58 @@ def test_supported_video_urls(client, url):
 def test_invalid_video_urls(client, url):
     response = client.post("/api/videos/process", json={"url": url})
     assert_error(response, 400, "INVALID_YOUTUBE_URL")
-    assert mock_video_service.processed_videos == {}
+    assert video_service.processed_videos == {}
 
 
-def test_mock_transcript_is_fixed_and_stored(client):
+def test_real_transcript_is_normalized_and_stored(client, caption_api):
     first = process(client)
     second = process(client, OTHER_VIDEO_ID)
     assert set(first) == {"status", "mode", "video", "transcript"}
     assert first["status"] == "ready"
-    assert first["mode"] == "mock"
-    assert first["transcript"] == second["transcript"]
+    assert first["mode"] == "real"
     assert first["transcript"] == [
-        {
-            "start_seconds": 0.0, "end_seconds": 5.0,
-            "text": "Welcome to VideoWise AI. This is a simulated transcript for frontend testing.",
-        },
-        {
-            "start_seconds": 5.0, "end_seconds": 12.0,
-            "text": "VideoWise AI will allow users to ask questions about YouTube videos.",
-        },
-        {
-            "start_seconds": 12.0, "end_seconds": 20.0,
-            "text": "The application will eventually retrieve relevant transcript sections using RAG.",
-        },
+        {"start_seconds": 0.25, "end_seconds": 4.75, "text": "Caption fixture: first sentence."},
+        {"start_seconds": 4.0, "end_seconds": 6.125, "text": "Caption fixture: second sentence."},
     ]
-    assert set(mock_video_service.processed_videos) == {VIDEO_ID, OTHER_VIDEO_ID}
+    assert second["transcript"] == first["transcript"]
+    assert caption_api.list.call_count == 2
+    assert set(video_service.processed_videos) == {VIDEO_ID, OTHER_VIDEO_ID}
+
+
+@pytest.mark.parametrize("failure,status,code", [
+    (TranscriptsDisabled(VIDEO_ID), 404, "TRANSCRIPT_NOT_AVAILABLE"),
+    (VideoUnavailable(VIDEO_ID), 404, "VIDEO_UNAVAILABLE"),
+    (AgeRestricted(VIDEO_ID), 403, "VIDEO_UNAVAILABLE"),
+    (IpBlocked(VIDEO_ID), 429, "YOUTUBE_RATE_LIMITED"),
+    (RequestBlocked(VIDEO_ID), 503, "YOUTUBE_ACCESS_BLOCKED"),
+    (Timeout("sensitive-upstream-test-detail"), 504, "TRANSCRIPT_FETCH_TIMEOUT"),
+    (ValueError("sensitive-upstream-test-detail"), 502, "TRANSCRIPT_FETCH_FAILED"),
+])
+def test_failed_extraction_never_returns_ready_or_stores_video(
+    client, caption_api, failure, status, code
+):
+    caption_api.list.side_effect = failure
+    response = client.post("/api/videos/process", json={"url": VIDEO_URL})
+    assert_error(response, status, code)
+    assert "status" not in response.json()
+    assert "transcript" not in response.json()
+    assert "sensitive-upstream-test-detail" not in response.text
+    assert video_service.processed_videos == {}
+
+
+def test_empty_extraction_cannot_be_chatted_about(client, caption_api, make_track):
+    caption_api.list.return_value = [make_track(snippets=[])]
+    response = client.post("/api/videos/process", json={"url": VIDEO_URL})
+    assert_error(response, 404, "TRANSCRIPT_NOT_AVAILABLE")
+    assert_error(ask(client), 404, "VIDEO_NOT_FOUND")
+
+
+def test_chat_reports_lost_serverless_state(client):
+    process(client)
+    conversation_id = ask(client).json()["conversation_id"]
+    video_service.processed_videos.clear()
+    mock_chat_service.conversations.clear()
+    assert_error(ask(client, conversation_id=conversation_id), 404, "VIDEO_NOT_FOUND")
 
 
 def test_chat_creates_conversation_and_returns_transcript_source(client):
@@ -220,7 +251,7 @@ def test_unexpected_error_is_generic_and_has_cors(client, monkeypatch):
     def fail(url):
         raise RuntimeError("Private implementation details")
 
-    monkeypatch.setattr(mock_video_service, "process_video", fail)
+    monkeypatch.setattr(video_service, "process_video", fail)
     response = client.post(
         "/api/videos/process", json={"url": VIDEO_URL},
         headers={"Origin": "http://localhost:5173"},
@@ -291,6 +322,10 @@ def test_swagger_and_openapi_contract(client):
     chat_errors = schema["paths"]["/api/chat/ask"]["post"]["responses"]["404"]
     assert "CONVERSATION_NOT_FOUND" in chat_errors["content"]["application/json"]["examples"]
     models = schema["components"]["schemas"]
+    video_responses = schema["paths"]["/api/videos/process"]["post"]["responses"]
+    for status in ("400", "403", "404", "422", "429", "500", "502", "503", "504"):
+        assert video_responses[status]["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorResponse")
+    assert models["VideoProcessResponse"]["properties"]["mode"]["const"] == "real"
     for field in ("title", "duration_seconds"):
         assert {"type": "null"} in models["VideoMetadata"]["properties"][field]["anyOf"]
     assert {"SourceSegment", "TranscriptSegment", "ApiError", "ErrorResponse"} <= set(models)

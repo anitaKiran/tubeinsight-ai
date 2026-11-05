@@ -31,6 +31,6 @@ class TranscriptSegment(BaseModel):
 
 class VideoProcessResponse(BaseModel):
     status: Literal["ready"] = "ready"
-    mode: Literal["mock"] = "mock"
+    mode: Literal["real"] = "real"
     video: VideoMetadata
     transcript: list[TranscriptSegment]
