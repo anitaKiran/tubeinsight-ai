@@ -15,6 +15,10 @@ from app.services import youtube_transcript_service
 def isolated_caption_environment(monkeypatch, request):
     if request.node.get_closest_marker("integration"):
         return
+    # Test defaults must never consume a developer's real proxy credentials.
+    # Empty values also prevent load_dotenv from reintroducing real credentials.
+    monkeypatch.setenv("WEBSHARE_PROXY_USERNAME", "")
+    monkeypatch.setenv("WEBSHARE_PROXY_PASSWORD", "")
     for key, value in {
         "YOUTUBE_CAPTION_LANGUAGES": "en",
         "YOUTUBE_CAPTION_FALLBACK": "true",

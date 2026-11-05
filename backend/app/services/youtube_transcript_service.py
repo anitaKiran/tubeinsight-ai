@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 
 from requests import HTTPError, RequestException, Session, Timeout
+from requests.exceptions import ConnectionError, ProxyError, RetryError
 from youtube_transcript_api import (
     AgeRestricted,
     InvalidVideoId,
@@ -21,11 +22,39 @@ from youtube_transcript_api import (
     VideoUnplayable,
     YouTubeTranscriptApi,
 )
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from app.schemas.error import ApiException
 from app.schemas.video import TranscriptSegment
 
 logger = logging.getLogger(__name__)
+
+
+def get_proxy_config() -> WebshareProxyConfig | None:
+    """Enable Webshare only with a complete pair; never include values in errors."""
+    username = os.getenv("WEBSHARE_PROXY_USERNAME", "")
+    password = os.getenv("WEBSHARE_PROXY_PASSWORD", "")
+    has_username = bool(username.strip())
+    has_password = bool(password.strip())
+    if has_username != has_password:
+        raise ApiException(
+            500, "INTERNAL_SERVER_ERROR",
+            "Configure both WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD, "
+            "or leave both unset to use direct caption retrieval.",
+        )
+    if not has_username:
+        return None
+    # Disable the library's nested HTTP/blocked retries. We retry once at the
+    # extraction level, where every send still observes our deadline and cap.
+    return WebshareProxyConfig(
+        proxy_username=username, proxy_password=password, retries_when_blocked=0
+    )
+
+
+def _retryable_proxy_failure(exc: Exception) -> bool:
+    if isinstance(exc, ApiException):
+        return exc.code in {"YOUTUBE_RATE_LIMITED", "YOUTUBE_ACCESS_BLOCKED"}
+    return isinstance(exc, (RequestBlocked, ConnectionError, Timeout, RetryError))
 
 
 @dataclass(frozen=True)
@@ -150,19 +179,47 @@ def normalize_snippets(snippets) -> list[TranscriptSegment]:
     return segments
 
 
+def _retrieve_captions(
+    api: YouTubeTranscriptApi, video_id: str, settings: TranscriptSettings
+) -> tuple[Transcript, list[TranscriptSegment]]:
+    tracks = list(api.list(video_id))
+    track = select_transcript(tracks, settings)
+    return track, normalize_snippets(track.fetch(preserve_formatting=False))
+
+
 def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
     """Fetch one original caption track, without translation or fabricated data."""
     if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id) is None:
         raise ApiException(400, "INVALID_YOUTUBE_URL", "Please provide a valid YouTube URL.")
     settings = TranscriptSettings.from_env()
+    transport = "direct"
     try:
+        proxy_config = get_proxy_config()
+        transport = "webshare" if proxy_config is not None else "direct"
         # The library's Session is not thread-safe; never share it across requests.
         with BoundedYouTubeSession(settings) as session:
-            tracks = list(YouTubeTranscriptApi(http_client=session).list(video_id))
-            track = select_transcript(tracks, settings)
-            snippets = track.fetch(preserve_formatting=False)
-            segments = normalize_snippets(snippets)
-            logger.info("Caption extraction succeeded: video=%s language=%s generated=%s", video_id, track.language_code, track.is_generated)
+            if proxy_config is None:
+                api = YouTubeTranscriptApi(http_client=session)
+            else:
+                # Explicit proxy configuration must not be overridden by ambient
+                # HTTP(S)_PROXY settings. The direct path keeps its old defaults.
+                session.trust_env = False
+                api = YouTubeTranscriptApi(http_client=session, proxy_config=proxy_config)
+            try:
+                track, segments = _retrieve_captions(api, video_id, settings)
+            except Exception as exc:
+                if not (
+                    proxy_config is not None and _retryable_proxy_failure(exc)
+                    and time.monotonic() < session.deadline and session.send_count < 6
+                ):
+                    raise
+                # Exactly one further attempt through Webshare; never fall back
+                # to direct requests. This shares the original time/send budget.
+                track, segments = _retrieve_captions(api, video_id, settings)
+            logger.info(
+                "Caption extraction succeeded: video=%s language=%s generated=%s transport=%s",
+                video_id, track.language_code, track.is_generated, transport,
+            )
             return segments
     except ApiException:
         raise
@@ -187,7 +244,7 @@ def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
             "This YouTube video is private or restricted.",
         ) from None
     except IpBlocked:
-        # In the supported library version, IpBlocked represents HTTP 429.
+        # The library uses this for HTTP 429 and CAPTCHA/IP refusals.
         raise ApiException(
             429, "YOUTUBE_RATE_LIMITED",
             "YouTube is rate limiting caption requests. Try again later.",
@@ -202,6 +259,16 @@ def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
             504, "TRANSCRIPT_FETCH_TIMEOUT",
             "YouTube caption retrieval timed out. Try again later.",
         ) from None
+    except (ProxyError, RetryError) as exc:
+        logger.warning(
+            "Caption proxy failed: video=%s transport=%s type=%s",
+            video_id, transport, type(exc).__name__,
+        )
+        raise ApiException(
+            502, "TRANSCRIPT_FETCH_FAILED",
+            "Caption proxy connection failed or its retry limit was reached. "
+            "Check proxy availability and configuration.",
+        ) from None
     except HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 429:
             raise ApiException(
@@ -215,7 +282,10 @@ def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
     except Exception as exc:
         # Includes upstream XML/JSON/schema failures. Log only the exception type,
         # never upstream HTML, cookies, signed URLs, or private configuration.
-        logger.warning("Caption extraction failed: video=%s type=%s", video_id, type(exc).__name__)
+        logger.warning(
+            "Caption extraction failed: video=%s transport=%s type=%s",
+            video_id, transport, type(exc).__name__,
+        )
         raise ApiException(
             502, "TRANSCRIPT_FETCH_FAILED",
             "Could not retrieve YouTube captions. Try again later.",
