@@ -15,5 +15,5 @@ router = APIRouter(prefix="/api/videos", tags=["videos"])
     responses=error_responses(400, 403, 404, 422, 429, 500, 502, 503, 504, video_processing=True),
 )
 def process_video(request: VideoProcessRequest) -> VideoProcessResponse:
-    """Retrieve real YouTube captions; unavailable title and duration are null."""
+    """Return saved captions; local auto mode fetches and saves missing captions."""
     return video_service.process_video(request.url)

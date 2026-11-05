@@ -1,5 +1,34 @@
 # React + TypeScript + Vite
 
+## Local API requests
+
+The frontend uses `VITE_API_BASE_URL`, defaulting to `http://localhost:8000`.
+Start the backend with its own `backend/.venv` interpreter; see the
+[backend instructions](../backend/README.md). Restart Vite after editing frontend
+environment variables.
+
+Video processing has a 60-second timeout covering both headers and response bodies
+to allow a local cache miss to fetch captions and save them. Health and chat use
+15-second timeouts.
+A stalled backend produces a visible error and releases the Process/Send button.
+Reset/unmount cancellation still silently discards the cancelled request.
+
+With `APP_ENV=development` and `TRANSCRIPT_SOURCE=auto` on the local backend, the
+Process button fetches and saves uncached captions automatically. Vercel and
+production are cache-only; uncached URLs there return "This video has not been
+prepared yet." Both backends must use the same Supabase project.
+
+For deployment, set `VITE_API_BASE_URL` to the deployed FastAPI origin in the
+frontend build environment. For localhost, use `http://localhost:8000` as in
+`.env.example`. Never put backend Supabase keys in frontend variables.
+
+Run the mocked request/timeout tests with Node.js 24 (no backend or keys needed):
+
+```sh
+npm test
+npm run build
+```
+
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
 Currently, two official plugins are available:

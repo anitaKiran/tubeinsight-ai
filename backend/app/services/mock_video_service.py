@@ -1,5 +1,5 @@
-"""Legacy import compatibility; video processing now retrieves real captions."""
+"""Legacy import compatibility for video processing."""
 
-from app.services.video_service import extract_video_id, process_video, processed_videos
+from app.services.video_service import extract_video_id, process_video
 
-__all__ = ["extract_video_id", "process_video", "processed_videos"]
+__all__ = ["extract_video_id", "process_video"]

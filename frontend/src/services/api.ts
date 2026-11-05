@@ -1,70 +1,22 @@
 import type {
   ChatRequest,
   ChatResponse,
-  ErrorResponse,
   HealthResponse,
   ProcessVideoResponse,
 } from "../types/api";
-
+import { requestJson } from "./http";
+export { ApiError } from "./http";
 
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
 ).replace(/\/+$/, "");
 
-export class ApiError extends Error {
-  readonly code: string;
-  readonly status: number;
-
-  constructor(message: string, code: string, status: number) {
-    super(message);
-    this.name = "ApiError";
-    this.code = code;
-    this.status = status;
-  }
-}
-
 async function request<T>(
   path: string,
   options: RequestInit = {},
+  timeoutMs?: number,
 ): Promise<T> {
-  let response: Response;
-
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, options);
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw error;
-    }
-
-    throw new ApiError(
-      "Cannot reach the backend. Check that it is running and allows this frontend address.",
-      "NETWORK_ERROR",
-      0,
-    );
-  }
-
-  if (!response.ok) {
-    let message = `Request failed (${response.status}). Please try again.`;
-    let code = "REQUEST_FAILED";
-
-    try {
-      const body = (await response.json()) as ErrorResponse;
-
-      if (typeof body.error?.message === "string") {
-        message = body.error.message;
-      }
-
-      if (typeof body.error?.code === "string") {
-        code = body.error.code;
-      }
-    } catch {
-      // Keep the fallback message if the server did not return JSON.
-    }
-
-    throw new ApiError(message, code, response.status);
-  }
-
-  return response.json() as Promise<T>;
+  return requestJson<T>(`${API_BASE_URL}${path}`, options, timeoutMs);
 }
 
 export function checkHealth(signal?: AbortSignal) {
@@ -72,6 +24,7 @@ export function checkHealth(signal?: AbortSignal) {
 }
 
 export function processVideo(url: string, signal?: AbortSignal) {
+  // A local cache miss includes caption retrieval and a confirmed database write.
   return request<ProcessVideoResponse>("/api/videos/process", {
     method: "POST",
     headers: {
@@ -79,7 +32,7 @@ export function processVideo(url: string, signal?: AbortSignal) {
     },
     body: JSON.stringify({ url }),
     signal,
-  });
+  }, 60_000);
 }
 
 export function askQuestion(
