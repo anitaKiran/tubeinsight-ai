@@ -14,7 +14,7 @@ export interface VideoMetadata {
 
 export interface ProcessVideoResponse {
   status: "ready";
-  mode: "mock";
+  mode: "mock" | "real";
   video: VideoMetadata;
   transcript: TranscriptSegment[];
 }

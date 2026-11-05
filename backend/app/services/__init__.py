@@ -1,1 +1,1 @@
-"""Mock services; replace implementations without changing the API fields."""
+"""tubeInsight-ai services behind the stable video and chat API fields."""

@@ -51,11 +51,11 @@ def error_response(status: int, code: str, message: str) -> JSONResponse:
 def create_app() -> CORSMiddleware:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     api = FastAPI(
-        title="VideoWise AI API",
-        version="0.1.0",
+        title="tubeInsight-ai API",
+        version="0.2.0",
         description=(
-            "Day 1 mock backend. All transcripts and answers are simulated; "
-            "no YouTube content or AI service is accessed."
+            "Real YouTube captions with original timestamps. Chat answers remain "
+            "simulated; no AI service is accessed."
         ),
     )
 

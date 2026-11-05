@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from app.schemas.chat import ChatResponse, SourceSegment
 from app.schemas.error import ApiException
-from app.services.mock_video_service import processed_videos
+from app.services.video_service import processed_videos
 
 MOCK_ANSWER = (
     "This is a simulated AI response for frontend development. "

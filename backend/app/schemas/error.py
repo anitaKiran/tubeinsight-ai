@@ -20,32 +20,35 @@ class ApiException(Exception):
         self.message = message
 
 
-def error_responses(*statuses: int) -> dict:
-    """Use the same envelope in Swagger and in exception handlers."""
+def error_responses(*statuses: int, video_processing: bool = False) -> dict:
+    """Document the shared envelope, including caption-provider failures."""
     errors = {
-        400: (
-            "INVALID_YOUTUBE_URL",
-            "Please provide a valid YouTube URL.",
-        ),
-        404: ("VIDEO_NOT_FOUND", "Process this video before asking questions."),
-        422: ("VALIDATION_ERROR", "Missing or invalid request fields."),
-        500: ("INTERNAL_SERVER_ERROR", "An unexpected backend error occurred."),
+        400: [("INVALID_YOUTUBE_URL", "Please provide a valid YouTube URL.")],
+        404: [
+            ("VIDEO_NOT_FOUND", "Process this video before asking questions."),
+            ("CONVERSATION_NOT_FOUND", "Conversation not found for this video."),
+        ],
+        422: [("VALIDATION_ERROR", "Missing or invalid request fields.")],
+        500: [("INTERNAL_SERVER_ERROR", "An unexpected backend error occurred.")],
     }
+    if video_processing:
+        errors.update({
+            403: [("VIDEO_UNAVAILABLE", "This YouTube video is private or restricted.")],
+            404: [
+                ("VIDEO_UNAVAILABLE", "This YouTube video is unavailable."),
+                ("TRANSCRIPT_NOT_AVAILABLE", "No transcript is available for this video."),
+            ],
+            429: [("YOUTUBE_RATE_LIMITED", "YouTube is rate limiting caption requests. Try again later.")],
+            502: [("TRANSCRIPT_FETCH_FAILED", "Could not retrieve YouTube captions. Try again later.")],
+            503: [("YOUTUBE_ACCESS_BLOCKED", "YouTube is blocking caption requests from this server.")],
+            504: [("TRANSCRIPT_FETCH_TIMEOUT", "YouTube caption retrieval timed out. Try again later.")],
+        })
     responses = {}
     for status in statuses:
-        code, message = errors[status]
         examples = {
             code: {"value": {"error": {"code": code, "message": message}}}
+            for code, message in errors[status]
         }
-        if status == 404:
-            examples["CONVERSATION_NOT_FOUND"] = {
-                "value": {
-                    "error": {
-                        "code": "CONVERSATION_NOT_FOUND",
-                        "message": "Conversation not found for this video.",
-                    }
-                }
-            }
         responses[status] = {
             "model": ErrorResponse,
             "description": " / ".join(examples),
