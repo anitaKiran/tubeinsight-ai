@@ -1,4 +1,4 @@
-/** tubeInsight-ai Phase 1 contract. Timestamps are seconds from video start. */
+/** tubeInsight-ai Phase 2 prepared-video contract. Timestamps are seconds. */
 export interface VideoMetadata {
   id: string;
   title: string | null;
