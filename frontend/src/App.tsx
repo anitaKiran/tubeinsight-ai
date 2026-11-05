@@ -52,6 +52,8 @@ function App() {
   const video = processedVideo?.video ?? null;
   const isMock = processedVideo?.mode === "mock";
 
+  const [activeTab, setActiveTab] = useState<"chat" | "transcript">("chat");
+
   useEffect(() => {
     const controller = new AbortController();
 
@@ -93,6 +95,7 @@ function App() {
     setQuestion("");
     setChatError("");
     setIsChatLoading(false);
+    setActiveTab("chat");
   }
 
   async function handleLoadVideo(event: FormEvent<HTMLFormElement>) {
@@ -415,32 +418,6 @@ function App() {
                 >
                   Open actual video on YouTube ↗
                 </a>
-
-                <details className="transcript-preview">
-                  <summary>
-                    {isMock ? "Simulated transcript" : "Transcript"}
-                  </summary>
-
-                  {processedVideo.transcript.length === 0 ? (
-                    <p className="helper-text">
-                      No transcript segments were returned.
-                    </p>
-                  ) : (
-                    processedVideo.transcript.map((segment, index) => (
-                      <div className="transcript-segment" key={index}>
-                        <a
-                          href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(segment.start_seconds)}s`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`Open video at ${formatTimestamp(segment.start_seconds)}${isMock ? "; simulated source timestamp" : ""}`}
-                        >
-                          {formatTimestamp(segment.start_seconds)}
-                        </a>
-                        <p>{segment.text}</p>
-                      </div>
-                    ))
-                  )}
-                </details>
               </div>
             ) : (
               <div className="empty-state">
@@ -456,9 +433,31 @@ function App() {
             aria-labelledby="chat-heading"
           >
             <div className="panel-heading">
-              <h2 id="chat-heading">Ask VideoWise</h2>
+              <h2 id="chat-heading">Explore this video</h2>
               <span className="chat-label">Video Q&amp;A</span>
             </div>
+          
+          <div className="workspace-tabs" aria-label="Video views">
+            <button
+            type="button"
+            className={`workspace-tab ${activeTab === "chat" ? "is-active" : ""}`}
+            aria-pressed={activeTab === "chat"}
+            aria-controls="chat-view"
+            onClick={() => setActiveTab("chat")}
+          >
+            Chat
+           </button>
+           
+           <button
+              type="button"
+              className={`workspace-tab ${activeTab === "transcript" ? "is-active" : ""}`}
+              aria-pressed={activeTab === "transcript"}
+              aria-controls="transcript-view"
+              onClick={() => setActiveTab("transcript")}
+            >
+            Transcript
+          </button>
+        </div>
 
             {isMock && (
               <p className="mock-notice" role="note">
@@ -467,6 +466,11 @@ function App() {
               </p>
             )}
 
+          <div
+              id="chat-view"
+              className="chat-view"
+              hidden={activeTab !== "chat"}
+            >
             <div
               className="messages"
               role="log"
@@ -582,6 +586,58 @@ function App() {
             <p className="chat-disclaimer">
               Check the sources when reviewing an answer.
             </p>
+            </div>
+
+            <div
+              id="transcript-view"
+              className="transcript-view"
+              hidden={activeTab !== "transcript"}
+            >
+            {!video || !processedVideo ? (
+              <div className="chat-empty-state">
+                <h3>No transcript yet</h3>
+                <p>Analyse a video to view its transcript.</p>
+              </div>
+  ) : processedVideo.transcript.length === 0 ? (
+    <div className="chat-empty-state">
+      <h3>Transcript unavailable</h3>
+      <p>No transcript segments were returned for this video.</p>
+    </div>
+  ) : (
+    <>
+      <p className="helper-text">
+        {processedVideo.transcript.length} transcript segments.
+        Select a timestamp to open that moment on YouTube.
+      </p>
+
+      <div className="transcript-list">
+        {processedVideo.transcript.map((segment, index) => (
+          <div
+            className="transcript-segment"
+            key={`${segment.start_seconds}-${index}`}
+          >
+            <a
+              href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(
+                segment.start_seconds,
+              )}s`}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Open video at ${formatTimestamp(
+                segment.start_seconds,
+              )}${isMock ? "; simulated timestamp" : ""}`}
+            >
+              {formatTimestamp(segment.start_seconds)}
+            </a>
+
+            <p>{segment.text}</p>
+          </div>
+        ))}
+      </div>
+    </>
+  )}
+</div>
+
+
           </section>
         </div>
       </main>
