@@ -47,6 +47,7 @@ function App() {
   const chatRequestRef = useRef<AbortController | null>(null);
   const chatRequestIdRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const playerRef = useRef<HTMLIFrameElement | null>(null);
 
   const video = processedVideo?.video ?? null;
   const isMock = processedVideo?.mode === "mock";
@@ -83,6 +84,22 @@ function App() {
       });
     }
   }, [messages]);
+
+  function playAtTimestamp(seconds: number) {
+  if (!video || !playerRef.current || !Number.isFinite(seconds)) {
+    return;
+  }
+
+  const start = Math.max(0, Math.floor(seconds));
+
+  playerRef.current.src =
+    `https://www.youtube.com/embed/${video.id}?start=${start}&autoplay=1`;
+
+  playerRef.current.scrollIntoView({
+    behavior: "smooth",
+    block: "center",
+  });
+}
 
   function resetChat() {
     chatRequestRef.current?.abort();
@@ -384,7 +401,8 @@ function App() {
                 )}
 
                 <div className="video-player-container">
-                  <iframe
+                 <iframe
+                    ref={playerRef}
                     key={video.id}
                     className="video-player"
                     src={`https://www.youtube.com/embed/${video.id}`}
@@ -516,6 +534,18 @@ function App() {
                           {message.sources.map((source, index) => (
                             <a
                               className="source-card"
+                              onClick={(event) => {
+                              if (
+                                  event.ctrlKey ||
+                                  event.metaKey ||
+                                  event.shiftKey ||
+                                  event.altKey
+                                ) {
+                                  return;
+                              }
+                            event.preventDefault();
+                            playAtTimestamp(source.start_seconds);
+                          }}
                               key={`${source.start_seconds}-${index}`}
                               href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(source.start_seconds)}s`}
                               target="_blank"
@@ -607,7 +637,7 @@ function App() {
     <>
       <p className="helper-text">
         {processedVideo.transcript.length} transcript segments.
-        Select a timestamp to open that moment on YouTube.
+        Select a timestamp to play that moment in the video above.
       </p>
 
       <div className="transcript-list">
@@ -617,6 +647,18 @@ function App() {
             key={`${segment.start_seconds}-${index}`}
           >
             <a
+               onClick={(event) => {
+                if (
+                  event.ctrlKey ||
+                  event.metaKey ||
+                  event.shiftKey ||
+                  event.altKey
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                playAtTimestamp(segment.start_seconds);
+              }}
               href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(
                 segment.start_seconds,
               )}s`}
