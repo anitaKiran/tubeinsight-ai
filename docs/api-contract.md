@@ -3,7 +3,7 @@
 The backend checks Supabase first. Local `TRANSCRIPT_SOURCE=auto` automatically
 fetches and saves missing real captions before returning success.
 Vercel HTTP requests never contact YouTube. React request bodies and success
-response field names/types remain unchanged; chat answers remain mocked.
+response field names/types remain unchanged; chat now returns `mode: "real"`.
 
 ## Connection and endpoints
 
@@ -17,7 +17,7 @@ response field names/types remain unchanged; chat answers remain mocked.
 | --- | --- | --- |
 | GET | `/api/health` | 200: existing connectivity response |
 | POST | `/api/videos/process` | 200: saved real transcript |
-| POST | `/api/chat/ask` | 200: fixed mock answer |
+| POST | `/api/chat/ask` | 200: grounded RAG answer with real sources |
 
 There is no public ingestion, refresh, or transcript-write route.
 
@@ -120,7 +120,10 @@ original language. It never translates silently.
 
 ## POST `/api/chat/ask`
 
-A video must exist in Supabase. A previous process request is not required.
+A video must exist in Supabase and its current transcript/embedding fingerprint
+must be indexed in Pinecone. Chat never indexes or fetches YouTube; an unindexed
+video returns HTTP 409 `VIDEO_NOT_INDEXED`. A previous process request is not
+required if local CLI backfill already indexed the video.
 
 ```json
 {
@@ -133,7 +136,7 @@ A video must exist in Supabase. A previous process request is not required.
 | Field | Type | Required? | Rules |
 | --- | --- | --- | --- |
 | `video_id` | string | Yes | Valid 11-character saved ID |
-| `question` | string | Yes | Trimmed and nonblank |
+| `question` | string | Yes | Trimmed, nonblank, at most 4000 characters and 8000 UTF-8 bytes |
 | `conversation_id` | UUID string or null | No | Null/omitted starts; reuse returned ID for follow-ups |
 
 HTTP 200 (UUID/source excerpt are illustrative):
@@ -142,8 +145,8 @@ HTTP 200 (UUID/source excerpt are illustrative):
 {
   "video_id": "Gfr50f6ZBvo",
   "conversation_id": "e06a3f5a-1ad0-4e89-9f2b-172ed725fdc1",
-  "mode": "mock",
-  "answer": "This is a simulated AI response for frontend development. Real answers will be generated from the video transcript in a future version.",
+  "mode": "real",
+  "answer": "An answer grounded only in the retrieved transcript excerpts.",
   "sources": [
     {
       "start_seconds": 0.0,
@@ -156,15 +159,35 @@ HTTP 200 (UUID/source excerpt are illustrative):
 
 All fields are present. IDs, mode, and answer are strings; sources is an array
 of segments. New conversation IDs are UUID v4 and stay tied to one video.
-History is retained locally, but does not affect the fixed answer. Its source is
-the first saved caption for citation UI testing, not evidence supporting a real
-answer. Keep the mock-answer notice.
+`mode` is always `real`. Sources are the exact retrieved chunk text, verified
+against Supabase, with the minimum actual caption start and maximum actual end
+of all contributing segments. The default top-k is 4. Only model-selected relevant
+chunks become sources; invalid/cross-video text and timestamps are rejected.
+If evidence is absent or insufficient, return an honest inability-to-answer message
+and `sources: []`, without using general model knowledge as video evidence.
+
+The current question is answered independently. Conversation IDs remain compatible,
+but the model does not receive persistent conversation memory or earlier turns.
+At most 256 in-process conversations / 20 recent turns are retained; restarts,
+eviction, or another Vercel instance can expire a UUID.
 
 Unknown saved IDs return `VIDEO_NOT_FOUND` (404). Unknown/expired conversations
 or a different video return `CONVERSATION_NOT_FOUND` (404). Video lookup happens
 first. Conversation state is still in process memory: another Vercel instance can
 reject a previous UUID even though the saved video remains available. Start a
 new chat with null after that error.
+
+## RAG indexing and configuration
+
+Local video processing indexes the saved transcript before returning success.
+Production processing continues to return stored captions without running indexing.
+Use the local [indexing CLI](../backend/README.md#real-rag-setup-and-indexing) for
+older saved videos. Both deployments need the same index and embedding settings.
+Current setup uses `tubechunks`, cosine, and Pinecone-hosted
+`llama-text-embed-v2` on the `chunk_text` field, with
+`PINECONE_EMBEDDING_DIMENSIONS=1024`. This user-selected setup supersedes the
+original OpenAI embedding/1536-dimensional plan; OpenAI `gpt-6-luna` still
+generates grounded answers.
 
 ## Error envelope
 
@@ -177,7 +200,14 @@ message wording may vary.
 | 404 | `TRANSCRIPT_NOT_CACHED` | Processing an unprepared video |
 | 404 | `VIDEO_NOT_FOUND` | Chat video not saved |
 | 404 | `CONVERSATION_NOT_FOUND` | Unknown/expired UUID or wrong video |
+| 409 | `VIDEO_NOT_INDEXED` | Index the current saved transcript locally |
 | 422 | `VALIDATION_ERROR` | Missing/invalid fields or malformed JSON |
+| 422 | `INDEXING_LIMIT_EXCEEDED` | Local chunk limit reached |
+| 429 | `RAG_RATE_LIMITED` | Provider rate limit |
+| 500 | `PINECONE_INDEX_NOT_FOUND` / `PINECONE_INDEX_INCOMPATIBLE` | Missing index or wrong dimensions/metric |
+| 502 | `RAG_RESPONSE_INVALID` | Model citation IDs could not be verified |
+| 503 | `RAG_UNAVAILABLE` / `INDEXING_PENDING` | Provider failure or pending index visibility |
+| 504 | `RAG_TIMEOUT` / `INDEXING_TIMEOUT` | Bounded request/indexing timeout |
 | 500 | `CONFIGURATION_ERROR` | Missing/invalid backend settings |
 | 500 | `INTERNAL_SERVER_ERROR` | Unexpected failure |
 | 502 | `INVALID_STORED_TRANSCRIPT` | Corrupt captions; locally reingest with `--force` |
@@ -190,7 +220,7 @@ message wording may vary.
 ```
 
 Processing documents 400/403/404/422/429/500/502/503/504; chat
-404/422/500/502/503; health 500.
+404/409/422/429/500/502/503/504; health 500.
 Routing errors retain `NOT_FOUND` (404) and `METHOD_NOT_ALLOWED` (405). CORS
 preflight uses middleware. Database failures do not become cache misses. YouTube
 errors belong to local auto processing and ingestion, not the deployed API. Keys and raw
@@ -218,6 +248,8 @@ Vercel needs backend-only `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
 `APP_ENV=production`, `TRANSCRIPT_SOURCE=supabase`, and explicit frontend
 `CORS_ORIGINS`. Optional
 `SUPABASE_TIMEOUT_SECONDS` defaults to 10. No Supabase secret belongs in React or
-API requests. Follow the README to migrate, ingest locally, redeploy manually,
+API requests. RAG additionally requires backend OpenAI/Pinecone credentials, model,
+index name, and matching embedding dimensions. Follow the README to migrate,
+process/index locally, redeploy manually,
 and verify in Postman/React. Arbitrary unprepared videos and real RAG answers are
 outside this phase.

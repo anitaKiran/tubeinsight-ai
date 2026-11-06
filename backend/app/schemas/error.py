@@ -25,6 +25,7 @@ def error_responses(*statuses: int, video_processing: bool = False) -> dict:
     errors = {
         400: [("INVALID_YOUTUBE_URL", "Please provide a valid YouTube URL.")],
         403: [("VIDEO_UNAVAILABLE", "This YouTube video is private or restricted.")],
+        409: [("VIDEO_NOT_INDEXED", "This saved transcript has not been indexed. Index it locally before asking questions.")],
         404: [
             ("VIDEO_NOT_FOUND", "Process this video before asking questions."),
             ("CONVERSATION_NOT_FOUND", "Conversation not found for this video."),
@@ -47,6 +48,21 @@ def error_responses(*statuses: int, video_processing: bool = False) -> dict:
         ]
         errors[502].append(("TRANSCRIPT_FETCH_FAILED", "Could not retrieve YouTube captions. Try again later."))
         errors[503].append(("YOUTUBE_ACCESS_BLOCKED", "YouTube is blocking caption requests from this server."))
+    errors[422].append(("INDEXING_LIMIT_EXCEEDED", "Transcript exceeds configured local indexing limits."))
+    errors[429].append(("RAG_RATE_LIMITED", "AI providers are rate limiting requests. Try again later."))
+    errors[500].extend([
+        ("PINECONE_INDEX_NOT_FOUND", "Create the configured Pinecone index before indexing."),
+        ("PINECONE_INDEX_INCOMPATIBLE", "Pinecone embedding field, model, dimensions, and cosine metric must match backend configuration."),
+    ])
+    errors[502].append(("RAG_RESPONSE_INVALID", "The model did not return verifiable video sources. Please try again."))
+    errors[503].extend([
+        ("RAG_UNAVAILABLE", "AI providers are unavailable. Try again later."),
+        ("INDEXING_PENDING", "Transcript is saved; Pinecone indexing confirmation is pending."),
+    ])
+    errors[504].extend([
+        ("RAG_TIMEOUT", "AI provider request timed out. Try again later."),
+        ("INDEXING_TIMEOUT", "Transcript is saved; local indexing reached its time limit."),
+    ])
     responses = {}
     for status in statuses:
         examples = {

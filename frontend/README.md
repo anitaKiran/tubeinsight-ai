@@ -7,14 +7,15 @@ Start the backend with its own `backend/.venv` interpreter; see the
 [backend instructions](../backend/README.md). Restart Vite after editing frontend
 environment variables.
 
-Video processing has a 60-second timeout covering both headers and response bodies
-to allow a local cache miss to fetch captions and save them. Health and chat use
-15-second timeouts.
+Video processing has a 180-second timeout covering extraction, saving, and local
+vector indexing. Chat has a 90-second timeout; health checks use 15 seconds.
 A stalled backend produces a visible error and releases the Process/Send button.
 Reset/unmount cancellation still silently discards the cancelled request.
 
 With `APP_ENV=development` and `TRANSCRIPT_SOURCE=auto` on the local backend, the
-Process button fetches and saves uncached captions automatically. Vercel and
+Process button fetches and saves uncached captions and indexes them for RAG
+automatically. Chat responses use `mode: "real"` with actual source excerpts and
+timestamps. Vercel and
 production are cache-only; uncached URLs there return "This video has not been
 prepared yet." Both backends must use the same Supabase project.
 
