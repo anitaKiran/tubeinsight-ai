@@ -43,3 +43,21 @@ def upsert_video(video: StoredVideo | dict) -> StoredVideo:
         if not rows:
             raise ApiException(503, "DATABASE_UNAVAILABLE", "Transcript storage did not confirm the saved video.")
         return _stored_row(rows[0], record.video_id)
+
+
+def iter_video_ids(batch_size: int = 100):
+    """Keyset pagination avoids loading all long transcripts during backfill."""
+    previous = None
+    while True:
+        with get_supabase_client() as client:
+            query = client.table("videos").select("video_id").order("video_id").limit(batch_size)
+            if previous is not None:
+                query = query.gt("video_id", previous)
+            rows = query.execute().data
+        if not rows:
+            return
+        for row in rows:
+            yield row["video_id"]
+        previous = rows[-1]["video_id"]
+        if len(rows) < batch_size:
+            return

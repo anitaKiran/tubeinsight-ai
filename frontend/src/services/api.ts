@@ -32,7 +32,7 @@ export function processVideo(url: string, signal?: AbortSignal) {
     },
     body: JSON.stringify({ url }),
     signal,
-  }, 60_000);
+  }, 180_000);
 }
 
 export function askQuestion(
@@ -46,5 +46,5 @@ export function askQuestion(
     },
     body: JSON.stringify(payload),
     signal,
-  });
+  }, 90_000);
 }

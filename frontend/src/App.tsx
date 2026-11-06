@@ -17,7 +17,7 @@ type Message = {
   role: "user" | "assistant";
   text: string;
   sources?: TranscriptSegment[];
-  mode?: "mock";
+  mode?: "mock" | "real";
 };
 
 type ConnectionStatus = "checking" | "connected" | "unavailable";
@@ -252,15 +252,15 @@ function App() {
     connectionStatus === "checking"
       ? "Checking backend..."
       : connectionStatus === "connected"
-        ? "Backend connected · Mock mode"
+        ? "Backend connected"
         : "Backend unavailable";
 
   return (
     <div className="app-layout">
       <aside className="sidebar">
-        <a className="brand" href="/" aria-label="VideoWise AI home">
+        <a className="brand" href="/" aria-label="tubeInsight AI home">
           <span className="brand-icon" aria-hidden="true">▶</span>
-          <span>VideoWise <strong>AI</strong></span>
+          <span>tubeInsight <strong>AI</strong></span>
         </a>
 
         <p className="sidebar-description">
@@ -306,7 +306,7 @@ function App() {
               Add a YouTube video, ask questions, and explore its key ideas.
             </p>
           </div>
-          <span className="preview-badge">Mock API preview</span>
+          <span className="preview-badge">Video Q&A</span>
         </header>
 
         <section
@@ -456,7 +456,7 @@ function App() {
             aria-labelledby="chat-heading"
           >
             <div className="panel-heading">
-              <h2 id="chat-heading">Ask VideoWise</h2>
+              <h2 id="chat-heading">Ask tubeInsight</h2>
               <span className="chat-label">Video Q&amp;A</span>
             </div>
 
@@ -493,8 +493,8 @@ function App() {
                       {message.role === "user"
                         ? "You"
                         : message.mode === "mock"
-                          ? "VideoWise AI · Simulated"
-                          : "VideoWise AI"}
+                          ? "tubeInsight AI · Simulated"
+                          : "tubeInsight AI"}
                     </span>
 
                     <p>{message.text}</p>
