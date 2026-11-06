@@ -5,7 +5,8 @@ from uuid import UUID, uuid4
 
 from app.schemas.chat import ChatResponse, SourceSegment
 from app.schemas.error import ApiException
-from app.services.video_service import processed_videos
+from app.runtime import get_transcript_source
+from app.repositories import video_repository
 
 MOCK_ANSWER = (
     "This is a simulated AI response for frontend development. "
@@ -31,10 +32,11 @@ conversations: dict[UUID, Conversation] = {}
 def ask_question(
     video_id: str, question: str, conversation_id: UUID | None
 ) -> ChatResponse:
-    video = processed_videos.get(video_id)
+    get_transcript_source()  # Validate settings; chat always reads saved captions.
+    video = video_repository.get_video(video_id)
     if video is None:
         raise ApiException(
-            404, "VIDEO_NOT_FOUND", "Process this video before asking questions."
+            404, "VIDEO_NOT_FOUND", "This video has not been prepared yet."
         )
 
     if conversation_id is None:

@@ -52,10 +52,10 @@ def create_app() -> CORSMiddleware:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     api = FastAPI(
         title="tubeInsight-ai API",
-        version="0.2.0",
+        version="0.3.0",
         description=(
-            "Real YouTube captions with original timestamps. Chat answers remain "
-            "simulated; no AI service is accessed."
+            "Supabase-first captions with automatic local extraction in auto mode. "
+            "Production and Vercel use saved captions only; chat answers remain simulated."
         ),
     )
 

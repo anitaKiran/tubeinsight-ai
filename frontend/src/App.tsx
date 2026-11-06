@@ -246,7 +246,6 @@ function App() {
     setProcessedVideo(null);
     setError("");
     setIsVideoLoading(false);
-    setThumbnailFailed(false);
   }
 
   const connectionLabel =

@@ -1,201 +1,305 @@
-# tubeInsight-ai backend — Phase 1
+# tubeInsight-ai â€” Supabase storage and local ingestion
 
-FastAPI now retrieves real YouTube captions. Chat remains a fixed, explicitly
-simulated response. No LLM, RAG, audio downloads, transcription model, database,
-or paid transcript/proxy service is used.
+FastAPI checks Supabase first. In local **auto** mode, submitting a new YouTube
+URL automatically fetches real captions directly, validates them, and saves them
+before returning success. Cached videos skip YouTube. Vercel and explicitly
+production-configured servers read saved captions only. Local and deployed
+backends must use the same Supabase project. Chat remains mocked.
 
-## Install and run
+## Install
 
-Python 3.11+ is supported by the code; local verification used Python 3.12.
-From the repository root in PowerShell:
+Use Python 3.11+; the pinned official `supabase==2.34.0` SDK requires it.
+Local verification uses Python 3.12. From the repository root in PowerShell:
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-# Optional: copy only if you do not already have a local .env.
+# Initial setup only; preserve an existing .env and add the new variables.
 Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-For an existing environment, keep your `.env` and run the pip command again.
-On macOS/Linux use `python3 -m venv .venv` and `.venv/bin/python`.
+Activation is optional. On macOS/Linux use `python3` and `.venv/bin/python`.
+The official Supabase SDK uses HTTPS; no ORM or direct PostgreSQL driver is added.
 
-- Base URL: <http://localhost:8000>
-- Swagger: <http://localhost:8000/docs>
-- OpenAPI: <http://localhost:8000/openapi.json>
-- [API contract](../docs/api-contract.md) and [TypeScript interfaces](../docs/api-types.ts)
+## Supabase project and migration
 
-## API behavior
+1. Sign in at [Supabase](https://supabase.com/dashboard), choose **New project**,
+   and use the Free plan if creating a free organization. Choose a name, database
+   password, and region, then wait for provisioning. No project is created
+   automatically by this code.
+2. Copy the **Project URL** from the **Connect** dialog or Data API settings.
+   Use the HTTPS project origin, e.g. `https://your-project.supabase.co`, without
+   `/rest/v1` or other paths.
+3. In **Settings â†’ API Keys**, create/copy a server-side **Secret key** starting
+   with `sb_secret_`. This is not your database password, account access token,
+   publishable key, or legacy anon key. See [Supabase's key documentation](https://supabase.com/docs/guides/getting-started/api-keys).
+4. Open **SQL Editor â†’ New query**, paste all of
+   [001_create_videos.sql](migrations/001_create_videos.sql), and run it as the
+   project owner. It creates `public.videos`, enables RLS, revokes public/anon/
+   authenticated access, and grants the server role SELECT/INSERT/UPDATE. No
+   public policies are created. The trigger preserves `created_at` and advances
+   `updated_at` on updates.
+5. Open **Table Editor â†’ videos** to inspect saved rows and their JSONB transcript
+   arrays after ingestion. Table Editor uses your administrative project access;
+   public access remains disabled.
 
-| Method | Path | Behavior |
-| --- | --- | --- |
-| GET | `/api/health` | Existing connectivity response, kept compatible |
-| POST | `/api/videos/process` | Real captions, `mode: "real"`, nullable title/duration |
-| POST | `/api/chat/ask` | Fixed simulated answer, `mode: "mock"` |
+The migration is transactional and can be rerun for this schema. It does not
+reconcile an unrelated existing `videos` table with different columns.
+Repository validation rejects empty/all-blank transcripts, invalid types,
+nonfinite timestamps, and end times before start times. The SQL constraint also
+requires a nonempty JSON array. Upserts use `video_id` as the conflict key, do
+not delete first, and preserve caption order, gaps, overlaps, and fractional seconds.
 
-The existing URL validator is unchanged: watch, `youtu.be`, and Shorts URLs on
-exact allowed YouTube domains, with valid 11-character IDs. Credentials,
-lookalike domains, explicit ports, and malformed URLs/IDs are rejected.
+## Environment
+
+Edit the untracked `backend/.env` locally:
+
+```dotenv
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_your-real-server-side-key
+APP_ENV=development
+TRANSCRIPT_SOURCE=auto
+SUPABASE_TIMEOUT_SECONDS=10
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+```
+
+Never commit real keys, put them in React, use `VITE_` prefixes, or send them in
+public API requests. Both the app and CLI load `backend/.env`; shell variables
+have precedence. Missing configuration produces a safe `CONFIGURATION_ERROR`.
+Health/Swagger remain usable before Supabase is configured.
+
+`TRANSCRIPT_SOURCE=auto` enables local cache-first extraction and saving through
+`POST /api/videos/process`; there is no required manual ingestion step.
+`TRANSCRIPT_SOURCE=supabase` reads saved captions only, including locally. If unset,
+it defaults to `supabase`; unknown values return `CONFIGURATION_ERROR`.
+
+The server forces cache-only mode when `VERCEL=1`, when `VERCEL_ENV` is
+`production`, `preview`, or `development`, or when `APP_ENV` is `production`/`prod`.
+These server-side checks override an accidental `auto` setting. CLI and provider
+entry points also refuse extraction in these environments. The browser's address
+never determines backend policy. Vercel's [system variables](https://vercel.com/docs/environment-variables/system-environment-variables)
+identify its runtime, including preview deployments.
+
+Supabase uses a 10-second read/write/pool inactivity timeout, at most 3 seconds
+for connection, and no SDK retries. `SUPABASE_TIMEOUT_SECONDS` must be finite, positive, and at most 30.
+Redirects, auth persistence, and auth refresh are disabled. Clients close after
+each operation. These are inactivity bounds, not a strict overall deadline.
+
+### Current secret-key compatibility
+
+SDK 2.34.0 accepts `sb_secret_` keys but copies its key into `apikey` and
+`Authorization: Bearer`. Modern secret keys are not JWTs. Our scoped HTTPX request
+hook removes only that exact non-JWT Bearer copy and retains the SDK's `apikey`
+header. It does not replace the SDK or silently substitute a legacy key.
+Mocked HTTPS tests verify the actual headers. This implementation requires the
+current server-side secret format. See [Supabase's key limitations](https://supabase.com/docs/guides/getting-started/api-keys#known-limitations).
+
+## Optional local ingestion CLI
+
+The React Process button performs ingestion automatically in local `auto` mode.
+The CLI remains available for batches, explicit refresh, and preparing deployment
+data without using the frontend.
+
+From `backend/`:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.scripts.ingest_video "https://www.youtube.com/watch?v=Gfr50f6ZBvo"
+```
+
+The script validates the URL, checks Supabase, skips extraction if already cached,
+otherwise fetches original captions locally and upserts the validated record. It
+prints the actual segment count, selected language, and saved/cached status.
+Unknown title/duration stay null; the thumbnail is built from the actual video ID.
+
+Explicit refresh:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.scripts.ingest_video "https://youtu.be/Gfr50f6ZBvo" --force
+```
+
+Failed extraction/validation does not overwrite the old transcript. Failed writes
+never trigger deletion. A successful refresh atomically replaces the single row.
+`--force` can repair a corrupt stored transcript after successful extraction,
+but does not bypass database connectivity/configuration failures. A cached HTTP
+request returns existing metadata unchanged. Unknown metadata remains null;
+no title or duration is fabricated.
+
+Batch ingestion accepts one URL per line in a UTF-8 file. Blank lines and lines
+starting with `#` are ignored; URLs are processed independently:
+
+```powershell
+Set-Content -LiteralPath videos.txt -Encoding utf8 -Value @("https://youtu.be/Gfr50f6ZBvo", "https://youtu.be/dQw4w9WgXcQ")
+.\.venv\Scripts\python.exe -m app.scripts.ingest_videos videos.txt
+.\.venv\Scripts\python.exe -m app.scripts.ingest_videos videos.txt --force
+```
+
+The summary reports saved/cached/failure/success counts. Exit status is 0 on
+success, 1 on failure. Errors contain safe messages, not raw exceptions. No HTTP
+ingestion endpoint exists, and ingestion refuses to run in any Vercel or production environment.
+
+### Existing local caption options
+
+The previous watch/short-link/Shorts validator is retained. Manual and automatic
+captions are supported. English (including regional tracks) is preferred by
+default; manual wins within a preferred language, while English automatic captions
+outrank a manual foreign-language track. Other original languages can be selected;
+no translation occurs. End time remains caption start plus actual duration.
+
+| Local-only variable | Default |
+| --- | --- |
+| `YOUTUBE_CAPTION_LANGUAGES` | `en` |
+| `YOUTUBE_CAPTION_FALLBACK` | `true` |
+| `YOUTUBE_CONNECT_TIMEOUT_SECONDS` | `3` |
+| `YOUTUBE_READ_TIMEOUT_SECONDS` | `10` |
+| `YOUTUBE_REQUEST_BUDGET_SECONDS` | `30` |
+
+Caption extraction uses direct connections only. No proxy account or credentials
+are needed. The provider ignores ambient HTTP proxy settings, caps extraction at
+six HTTP sends, allows at most three redirects, and uses the timeouts above.
+There are no automatic retries. The request budget bounds new sends and socket
+waits; it is not a strict overall wall-clock deadline. YouTube may still block a
+local IP or have no captions; these cases return clear errors without saving data.
+The selected original caption language is stored internally, without adding an
+API field. See the [caption provider documentation](https://github.com/jdepoix/youtube-transcript-api).
+
+## API and local server
+
+Run this from `backend/` using the project's own interpreter, even if another
+virtual environment is already activated in your terminal:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+Open [Swagger](http://localhost:8000/docs), [OpenAPI](http://localhost:8000/openapi.json),
+the [API contract](../docs/api-contract.md), or [TypeScript interfaces](../docs/api-types.ts).
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/api/health
-Invoke-RestMethod http://localhost:8000/api/videos/process -Method Post -ContentType 'application/json' -Body '{"url":"https://www.youtube.com/watch?v=Gfr50f6ZBvo"}'
+Invoke-RestMethod http://localhost:8000/api/videos/process -Method Post -ContentType 'application/json' -Body '{"url":"https://youtu.be/Gfr50f6ZBvo"}'
 Invoke-RestMethod http://localhost:8000/api/chat/ask -Method Post -ContentType 'application/json' -Body '{"video_id":"Gfr50f6ZBvo","question":"What is this video about?","conversation_id":null}'
 ```
 
-Equivalent Bash curl examples:
+Processing reads Supabase first and, in local auto mode only, fetches and saves
+missing captions before returning. Chat recognizes saved video IDs without a prior
+process request and retains its fixed `mode: "mock"` answer. Its first source is
+real saved text for citation UI testing, not evidence supporting the mock answer.
+In cache-only mode a missing saved video returns `TRANSCRIPT_NOT_CACHED`
+(processing) or
+`VIDEO_NOT_FOUND` (chat), both 404. Invalid URLs still return 400.
 
-```bash
-curl http://localhost:8000/api/health
-curl http://localhost:8000/api/videos/process -H 'Content-Type: application/json' -d '{"url":"https://youtu.be/Gfr50f6ZBvo"}'
-curl http://localhost:8000/api/chat/ask -H 'Content-Type: application/json' -d '{"video_id":"Gfr50f6ZBvo","question":"What is this video about?","conversation_id":null}'
-```
+### Local page stays on Processing
 
-## Caption extraction and language selection
+Check `http://localhost:8000/api/health` first. It should respond quickly without
+accessing Supabase or YouTube. If it hangs, stop the local Uvicorn process and
+restart it with the project interpreter shown above. Check the terminal for a
+failed reload or missing dependency; an unrelated activated environment may not
+contain this backend's requirements.
 
-`video_service.py` validates the URL and passes only its video ID to
-`youtube_transcript_service.py`. The provider uses the installed
-`youtube-transcript-api` 1.2.4 public instance API: `YouTubeTranscriptApi(...).list(id)`
-and the selected track's `fetch(preserve_formatting=False)` method. No deprecated
-static `get_transcript` calls are used.
+The frontend defaults to `http://localhost:8000`. If `VITE_API_BASE_URL` is set,
+verify it points to the intended backend and restart Vite after changing it.
+Video processing, including reading its response body, times out after 60 seconds
+to allow a local cache miss to fetch and save captions. Health and chat retain
+15-second timeouts. Failures display an error and release the button.
 
-English captions, including regional English tracks, are preferred by default.
-Manual captions win over automatic ones within a preferred language. An automatic
-English track wins over a manual foreign-language track. If no preferred language
-exists and fallback is enabled, the first manual track (otherwise first automatic
-track) is used in its original language. Tracks are never translated. Text is the
-library's plain caption text; no text is invented, summarized, or filled in.
+For automatic local processing, set `APP_ENV=development` and
+`TRANSCRIPT_SOURCE=auto` in `backend/.env` and restart FastAPI. Paste a new URL and
+click Process. It is saved automatically; subsequent requests and the deployed
+backend can read it from the same database. If localhost still returns "not
+prepared yet", check inherited shell variables, which take precedence over `.env`.
+Applying the migration creates the table; the first local auto request fills it.
 
-Each segment preserves provider order and uses `end_seconds = start + duration`.
-Gaps and overlaps remain intact; a caption's end is not replaced by the next
-caption's start. Empty/all-blank results return an error. Only successful results
-are stored and returned as `ready`. No dummy-transcript fallback exists.
+## Vercel and frontend verification
 
-See the [maintainer's API documentation](https://github.com/jdepoix/youtube-transcript-api).
+In the existing **backend project** environment settings add:
 
-## Metadata investigation
+- `SUPABASE_URL`
+- `SUPABASE_SECRET_KEY` as a Secret/sensitive value
+- `APP_ENV=production`
+- `TRANSCRIPT_SOURCE=supabase`
+- `CORS_ORIGINS` with exact deployed React origin(s)
+- Optional `SUPABASE_TIMEOUT_SECONDS=10`
 
-Title and duration are intentionally `null` in this phase. The caption library
-does not provide reliable video metadata. A later, independent best-effort
-metadata step could use YouTube's registered [oEmbed endpoint](https://oembed.com/providers.json)
-for title/author information. The official [YouTube Data API videos resource](https://developers.google.com/youtube/v3/docs/videos/list)
-can supply richer metadata with separate API configuration and quota management.
-No extra metadata request or credential is introduced here. Transcript retrieval
-never depends on metadata availability, and caption end times are not presented
-as a video's duration. The existing thumbnail pattern is unchanged.
+Retain the working Python runtime/entrypoint settings. Dependencies resolve from
+`backend/requirements.txt`; the existing ASGI application is `app.main:app`.
+This repository snapshot has no tracked Vercel configuration to verify dashboard
+settings against. When ready, redeploy the backend with this code and variables.
+Variable changes apply to new deployments, as described by [Vercel](https://vercel.com/docs/environment-variables).
+No commit, push, deployment, or project creation is automated by this task.
 
-## Configuration
+In **Postman**, GET `https://YOUR-BACKEND.vercel.app/api/health`. After local
+ingestion, POST `/api/videos/process` with raw JSON
+`{ "url": "https://youtu.be/Gfr50f6ZBvo" }`. Expect 200, `ready`, `real`, and the
+same saved captions with numeric second timestamps. Repeat to verify persistent
+retrieval. Do not send a Supabase key. A valid unprepared ID returns 404
+`TRANSCRIPT_NOT_CACHED`, never a YouTube fallback. POST `/api/chat/ask` with that
+saved ID, a question, and null conversation ID; expect the unchanged mock response.
 
-`backend/.env` is loaded by the app; shell variables take precedence.
+Open deployed React, load the prepared URL, inspect transcript/timestamp links,
+and send a question. Try an unprepared URL and confirm its readable error. Anita
+needs no request, success-schema, component, or environment change if the backend
+base URL stays the same. This intentionally supports prepared videos and does
+not fetch arbitrary new videos on Vercel.
 
-| Variable | Default | Meaning |
+## Errors and remaining limits
+
+All errors retain `{ "error": { "code": "...", "message": "..." } }`.
+
+| HTTP | Code | Meaning |
 | --- | --- | --- |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Exact comma-separated React origins |
-| `YOUTUBE_CAPTION_LANGUAGES` | `en` | Ordered comma-separated preferred language codes, e.g. `en,de` |
-| `YOUTUBE_CAPTION_FALLBACK` | `true` | Allow another available original language |
-| `YOUTUBE_CONNECT_TIMEOUT_SECONDS` | `3` | Per-send connection timeout |
-| `YOUTUBE_READ_TIMEOUT_SECONDS` | `10` | Per-send read inactivity timeout |
-| `YOUTUBE_REQUEST_BUDGET_SECONDS` | `30` | Budget checked before each HTTP send |
+| 400 | `INVALID_YOUTUBE_URL` | Malformed/unsupported URL or ID |
+| 404 | `TRANSCRIPT_NOT_CACHED` | Video has not been prepared |
+| 404 | `VIDEO_NOT_FOUND` | Chat video is not saved |
+| 404 | `CONVERSATION_NOT_FOUND` | Unknown/expired UUID or wrong video |
+| 422 | `VALIDATION_ERROR` | Invalid request or record to save |
+| 500 | `CONFIGURATION_ERROR` | Missing/invalid backend settings |
+| 500 | `INTERNAL_SERVER_ERROR` | Unexpected failure |
+| 502 | `INVALID_STORED_TRANSCRIPT` | Corrupt captions; reingest locally with `--force` |
+| 503 | `DATABASE_UNAVAILABLE` | Supabase network/auth/permission/schema failure |
 
-Timeout values must be finite, positive, and at most 120 seconds. A new Session
-is created and closed for each extraction because the library's Session is not
-thread-safe. Requests use the smaller of the configured timeout and remaining
-budget, at most six HTTP sends and three redirects, and no automatic retries.
-The budget is not a hard wall-clock cancellation of an in-flight response:
-Requests read timeouts measure inactivity. Set the platform function duration
-above the expected retrieval time and test it from the deployment region.
+Local auto processing and the CLI retain the existing YouTube errors, including
+`TRANSCRIPT_NOT_AVAILABLE` (404), `VIDEO_UNAVAILABLE` (403/404),
+`YOUTUBE_RATE_LIMITED` (429), `YOUTUBE_ACCESS_BLOCKED` (503),
+`TRANSCRIPT_FETCH_FAILED` (502), and `TRANSCRIPT_FETCH_TIMEOUT` (504).
+Production requests
+never contact YouTube on these failures. Database errors do not become cache
+misses or fake success. Service logs/output do not include keys, auth headers,
+raw database errors, or signed caption URLs.
 
-Use explicit production `CORS_ORIGINS`; wildcards and paths are rejected. An
-empty value disables cross-origin access. Restart after configuration changes.
+Videos persist across Vercel instances. **Conversations and history remain in
+process memory.** A cold start/different instance can still return
+`CONVERSATION_NOT_FOUND`; React already resets that stale ID. Persistent
+conversation memory and real answers are not implemented in this phase.
 
-## Error responses
-
-Every application failure uses `{ "error": { "code": "...", "message": "..." } }`.
-No upstream HTML, credentials, stack traces, or raw library errors are returned.
-
-| HTTP | Code | Situation |
-| --- | --- | --- |
-| 400 | `INVALID_YOUTUBE_URL` | Invalid URL or video ID |
-| 403 | `VIDEO_UNAVAILABLE` | Private, age-restricted, or unplayable video |
-| 404 | `VIDEO_UNAVAILABLE` | Missing/removed video |
-| 404 | `TRANSCRIPT_NOT_AVAILABLE` | Captions disabled/missing/empty or no allowed language |
-| 429 | `YOUTUBE_RATE_LIMITED` | Upstream HTTP 429 / library `IpBlocked` |
-| 502 | `TRANSCRIPT_FETCH_FAILED` | Upstream network or caption parsing failure |
-| 503 | `YOUTUBE_ACCESS_BLOCKED` | Bot/IP blocking, upstream HTTP 403, or required PO token |
-| 504 | `TRANSCRIPT_FETCH_TIMEOUT` | Upstream timeout or exhausted send budget |
-| 404 | `VIDEO_NOT_FOUND` | Mock chat cannot find processed video in this process |
-| 404 | `CONVERSATION_NOT_FOUND` | Conversation absent or bound to a different video |
-| 422 | `VALIDATION_ERROR` | Missing/invalid request fields or malformed JSON |
-| 500 | `INTERNAL_SERVER_ERROR` | Unexpected application failure |
-
-A library `IpBlocked` means HTTP 429 in version 1.2.4; it cannot reliably tell
-whether that refusal is temporary rate limiting or an IP reputation block.
-Neither 429 nor 503 should trigger rapid automatic retries. Failures never return
-HTTP 200 or a synthetic transcript. Swagger documents all endpoint errors.
-
-## Tests
-
-From `backend/`:
+## Automated and optional live checks
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
-The ordinary suite mocks the public caption client and blocks unexpected external
-requests. It covers normalization, fractional timestamps/overlaps, original text,
-manual/automatic language choice, empty/missing captions, upstream errors,
-finite timeouts and request limits, URL validation, schema/OpenAPI, CORS, health,
-mock chat, and lost in-memory state. The optional live check is skipped by default.
+Ordinary tests mock Supabase and YouTube, block unexpected network sends, and need
+no real keys. SDK tests exercise real query builders over MockTransport, including
+headers, atomic upserts, repeated reads, errors, and cleanup. CLI tests cover
+skip/force/batch failures; API tests cover automatic fetch/save, cache reuse,
+failed extraction/writes, production and preview guards, health/chat, CORS, and
+schemas. Direct-provider tests verify that no proxy configuration is used.
 
-To explicitly make real YouTube requests:
+The opt-in local caption test uses `RUN_YOUTUBE_INTEGRATION=1`. The separate live
+storage test requires a migrated project, local credentials, and explicit opt-in:
 
 ```powershell
-$env:RUN_YOUTUBE_INTEGRATION = '1'
-$env:YOUTUBE_TEST_VIDEO_ID = 'Gfr50f6ZBvo' # Replace with another public captioned video.
-.\.venv\Scripts\python.exe -m pytest tests/test_live_transcript.py -v -s
-Remove-Item Env:RUN_YOUTUBE_INTEGRATION
+$env:RUN_SUPABASE_INTEGRATION='1'
+.\.venv\Scripts\python.exe -m pytest tests/test_live_supabase.py -v -s
+Remove-Item Env:RUN_SUPABASE_INTEGRATION
 ```
 
-On Bash prefix the command with `RUN_YOUTUBE_INTEGRATION=1 YOUTUBE_TEST_VIDEO_ID=Gfr50f6ZBvo`.
-The live test validates the process response and mock chat. It intentionally fails
-if YouTube is blocked, unavailable, or has removed that video's captions.
+It may ingest the public test video if missing, then reads its genuine transcript
+repeatedly through the repository/API. It never writes fake test captions to your
+project. Live project/deployed API/browser verification must be reported separately;
+mocked tests do not establish deployment success.
 
-## Vercel considerations and remaining limitations
-
-This repository snapshot contains no tracked `vercel.json`, `pyproject.toml`,
-Python version selector, or Vercel project link. Existing dashboard root directory,
-entrypoint, runtime, duration, environment variables, and deployed region could
-not be verified from source. Keep the working deployment settings; do not replace
-them based on local success alone. For separate projects the backend dependencies
-must resolve from `backend/requirements.txt`; confirm the configured entrypoint
-loads the existing `app.main:app` ASGI application. The normal backend root is
-`backend/`, with React deployed separately from `frontend/`.
-
-Only lightweight Python HTTP/XML dependencies were added. The code does not
-require a browser, FFmpeg, ML models, video downloads, or persistent filesystem
-writes. Verify the selected Vercel Python runtime and exact production/preview
-CORS origins. See [Vercel's FastAPI guide](https://vercel.com/docs/frameworks/backend/fastapi)
-and [Python runtime documentation](https://vercel.com/docs/functions/runtimes/python).
-
-The [caption library documents cloud IP blocking](https://github.com/jdepoix/youtube-transcript-api#working-around-ip-bans-requestblocked-or-ipblocked-exception).
-Local extraction working does not establish that extraction works from Vercel.
-If deployed requests return `YOUTUBE_ACCESS_BLOCKED` or repeated 429s, options to
-assess separately include a permitted caption worker on a different network,
-an approved transcript provider, or an explicitly approved proxy arrangement.
-No paid service, proxy credentials, or cookie authentication is configured here.
-
-Processed videos and conversations still live in per-process dictionaries.
-A warm instance may retain them; another instance or a cold start will not.
-Processing can succeed on instance A and the immediately following chat on B can
-return `VIDEO_NOT_FOUND`. A follow-up can return `CONVERSATION_NOT_FOUND` after
-state is lost. This is a real deployment limitation, not a successful persistent
-chat implementation. The API reports these errors instead of fabricating state.
-
-Next phase: add a shared persistent repository, for example PostgreSQL with a
-video table keyed by video ID, original caption segments/language/version stored
-with metadata, conversations tied to videos, and ordered message turns. All
-processing/chat requests must read the shared store. Then chunk persisted
-transcripts without losing start/end times, embed/index the chunks, and add RAG
-answers with citations back to those stored timestamps. None of that is
-implemented in Phase 1.
+Next: chunk saved captions with their timestamps, persist chunks/embeddings
+(for example with Supabase pgvector), retrieve them in LangChain, and ground RAG
+answers/citations in stored segments. Add durable conversation/message storage
+before relying on cross-instance memory. These future features are not added here.

@@ -22,6 +22,7 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi,
 )
 
+from app.runtime import require_local_extraction
 from app.schemas.error import ApiException
 from app.schemas.video import TranscriptSegment
 
@@ -71,6 +72,8 @@ class BoundedYouTubeSession(Session):
 
     def __init__(self, settings: TranscriptSettings) -> None:
         super().__init__()
+        # Direct connections only; ignore ambient proxy and netrc configuration.
+        self.trust_env = False
         self.settings = settings
         self.deadline = time.monotonic() + settings.request_budget
         self.send_count = 0
@@ -150,20 +153,41 @@ def normalize_snippets(snippets) -> list[TranscriptSegment]:
     return segments
 
 
-def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
+def _retrieve_captions(
+    api: YouTubeTranscriptApi, video_id: str, settings: TranscriptSettings
+) -> tuple[Transcript, list[TranscriptSegment]]:
+    tracks = list(api.list(video_id))
+    track = select_transcript(tracks, settings)
+    return track, normalize_snippets(track.fetch(preserve_formatting=False))
+
+
+@dataclass(frozen=True)
+class CaptionTranscript:
+    segments: list[TranscriptSegment]
+    language: str
+
+
+def fetch_transcript_data(video_id: str) -> CaptionTranscript:
     """Fetch one original caption track, without translation or fabricated data."""
     if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id) is None:
         raise ApiException(400, "INVALID_YOUTUBE_URL", "Please provide a valid YouTube URL.")
-    settings = TranscriptSettings.from_env()
+    require_local_extraction()
     try:
-        # The library's Session is not thread-safe; never share it across requests.
+        settings = TranscriptSettings.from_env()
+    except ValueError:
+        raise ApiException(
+            500, "CONFIGURATION_ERROR", "Invalid local YouTube caption settings. Check backend configuration."
+        ) from None
+    try:
+        # The library's Session is not thread-safe; use one direct session per fetch.
         with BoundedYouTubeSession(settings) as session:
-            tracks = list(YouTubeTranscriptApi(http_client=session).list(video_id))
-            track = select_transcript(tracks, settings)
-            snippets = track.fetch(preserve_formatting=False)
-            segments = normalize_snippets(snippets)
-            logger.info("Caption extraction succeeded: video=%s language=%s generated=%s", video_id, track.language_code, track.is_generated)
-            return segments
+            api = YouTubeTranscriptApi(http_client=session)
+            track, segments = _retrieve_captions(api, video_id, settings)
+            logger.info(
+                "Caption extraction succeeded: video=%s language=%s generated=%s",
+                video_id, track.language_code, track.is_generated,
+            )
+            return CaptionTranscript(segments=segments, language=track.language_code)
     except ApiException:
         raise
     except InvalidVideoId:
@@ -187,7 +211,7 @@ def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
             "This YouTube video is private or restricted.",
         ) from None
     except IpBlocked:
-        # In the supported library version, IpBlocked represents HTTP 429.
+        # The library uses this for HTTP 429 and CAPTCHA/IP refusals.
         raise ApiException(
             429, "YOUTUBE_RATE_LIMITED",
             "YouTube is rate limiting caption requests. Try again later.",
@@ -215,8 +239,16 @@ def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
     except Exception as exc:
         # Includes upstream XML/JSON/schema failures. Log only the exception type,
         # never upstream HTML, cookies, signed URLs, or private configuration.
-        logger.warning("Caption extraction failed: video=%s type=%s", video_id, type(exc).__name__)
+        logger.warning(
+            "Caption extraction failed: video=%s type=%s",
+            video_id, type(exc).__name__,
+        )
         raise ApiException(
             502, "TRANSCRIPT_FETCH_FAILED",
             "Could not retrieve YouTube captions. Try again later.",
         ) from None
+
+
+def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
+    """Compatibility helper for local callers that only need caption segments."""
+    return fetch_transcript_data(video_id).segments

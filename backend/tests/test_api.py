@@ -10,7 +10,9 @@ from youtube_transcript_api import (
 )
 
 from app.main import DEFAULT_CORS_ORIGINS, create_app
-from app.services import mock_chat_service, video_service
+from app.services import mock_chat_service, video_service, youtube_transcript_service
+from app.repositories import video_repository
+from app.schemas.error import ApiException
 
 VIDEO_ID = "dQw4w9WgXcQ"
 OTHER_VIDEO_ID = "abcdefghijk"
@@ -18,13 +20,20 @@ VIDEO_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
 
 
 @pytest.fixture
-def client(monkeypatch, caption_api):
+def client(monkeypatch, saved_videos, make_record):
     monkeypatch.setenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
-    video_service.processed_videos.clear()
+    saved_videos.clear()
     mock_chat_service.conversations.clear()
+    saved_videos[VIDEO_ID] = make_record()
+    saved_videos[OTHER_VIDEO_ID] = make_record(OTHER_VIDEO_ID)
+
+    def forbidden_fetch(*args, **kwargs):
+        raise AssertionError("HTTP endpoints must never fetch YouTube captions.")
+
+    monkeypatch.setattr(youtube_transcript_service, "fetch_transcript_data", forbidden_fetch)
     with TestClient(create_app(), raise_server_exceptions=False) as test_client:
         yield test_client
-    video_service.processed_videos.clear()
+    saved_videos.clear()
     mock_chat_service.conversations.clear()
 
 
@@ -109,10 +118,10 @@ def test_supported_video_urls(client, url):
 def test_invalid_video_urls(client, url):
     response = client.post("/api/videos/process", json={"url": url})
     assert_error(response, 400, "INVALID_YOUTUBE_URL")
-    assert video_service.processed_videos == {}
+    video_repository.upsert_video.assert_not_called()
 
 
-def test_real_transcript_is_normalized_and_stored(client, caption_api):
+def test_saved_transcript_is_returned_repeatedly(client, caption_api, saved_videos):
     first = process(client)
     second = process(client, OTHER_VIDEO_ID)
     assert set(first) == {"status", "mode", "video", "transcript"}
@@ -123,44 +132,43 @@ def test_real_transcript_is_normalized_and_stored(client, caption_api):
         {"start_seconds": 4.0, "end_seconds": 6.125, "text": "Caption fixture: second sentence."},
     ]
     assert second["transcript"] == first["transcript"]
-    assert caption_api.list.call_count == 2
-    assert set(video_service.processed_videos) == {VIDEO_ID, OTHER_VIDEO_ID}
+    caption_api.list.assert_not_called()
+    assert video_repository.get_video.call_count == 2
+    assert set(saved_videos) == {VIDEO_ID, OTHER_VIDEO_ID}
 
 
-@pytest.mark.parametrize("failure,status,code", [
-    (TranscriptsDisabled(VIDEO_ID), 404, "TRANSCRIPT_NOT_AVAILABLE"),
-    (VideoUnavailable(VIDEO_ID), 404, "VIDEO_UNAVAILABLE"),
-    (AgeRestricted(VIDEO_ID), 403, "VIDEO_UNAVAILABLE"),
-    (IpBlocked(VIDEO_ID), 429, "YOUTUBE_RATE_LIMITED"),
-    (RequestBlocked(VIDEO_ID), 503, "YOUTUBE_ACCESS_BLOCKED"),
-    (Timeout("sensitive-upstream-test-detail"), 504, "TRANSCRIPT_FETCH_TIMEOUT"),
-    (ValueError("sensitive-upstream-test-detail"), 502, "TRANSCRIPT_FETCH_FAILED"),
+@pytest.mark.parametrize("status,code", [
+    (500, "CONFIGURATION_ERROR"), (503, "DATABASE_UNAVAILABLE"),
+    (502, "INVALID_STORED_TRANSCRIPT"),
 ])
-def test_failed_extraction_never_returns_ready_or_stores_video(
-    client, caption_api, failure, status, code
-):
-    caption_api.list.side_effect = failure
+def test_storage_failure_never_returns_ready(client, caption_api, status, code):
+    video_repository.get_video.side_effect = ApiException(status, code, "Storage unavailable.")
     response = client.post("/api/videos/process", json={"url": VIDEO_URL})
     assert_error(response, status, code)
-    assert "status" not in response.json()
     assert "transcript" not in response.json()
-    assert "sensitive-upstream-test-detail" not in response.text
-    assert video_service.processed_videos == {}
+    caption_api.list.assert_not_called()
+    video_repository.upsert_video.assert_not_called()
 
 
-def test_empty_extraction_cannot_be_chatted_about(client, caption_api, make_track):
-    caption_api.list.return_value = [make_track(snippets=[])]
+def test_uncached_video_never_falls_back_to_youtube(client, saved_videos, caption_api):
+    saved_videos.clear()
     response = client.post("/api/videos/process", json={"url": VIDEO_URL})
-    assert_error(response, 404, "TRANSCRIPT_NOT_AVAILABLE")
+    assert_error(response, 404, "TRANSCRIPT_NOT_CACHED")
+    assert response.json()["error"]["message"] == "This video has not been prepared yet."
     assert_error(ask(client), 404, "VIDEO_NOT_FOUND")
+    caption_api.list.assert_not_called()
 
 
-def test_chat_reports_lost_serverless_state(client):
+def test_only_conversation_state_is_lost_on_restart(client):
     process(client)
     conversation_id = ask(client).json()["conversation_id"]
-    video_service.processed_videos.clear()
     mock_chat_service.conversations.clear()
-    assert_error(ask(client, conversation_id=conversation_id), 404, "VIDEO_NOT_FOUND")
+    assert_error(ask(client, conversation_id=conversation_id), 404, "CONVERSATION_NOT_FOUND")
+    assert ask(client).status_code == 200
+
+
+def test_chat_reads_saved_video_without_processing_first(client):
+    assert ask(client).status_code == 200
 
 
 def test_chat_creates_conversation_and_returns_transcript_source(client):
@@ -197,7 +205,8 @@ def test_new_chats_have_distinct_conversations(client):
     assert ask(client).json()["conversation_id"] != ask(client).json()["conversation_id"]
 
 
-def test_unknown_video(client):
+def test_unknown_video(client, saved_videos):
+    saved_videos.clear()
     assert_error(ask(client), 404, "VIDEO_NOT_FOUND")
     assert mock_chat_service.conversations == {}
 
@@ -323,7 +332,7 @@ def test_swagger_and_openapi_contract(client):
     assert "CONVERSATION_NOT_FOUND" in chat_errors["content"]["application/json"]["examples"]
     models = schema["components"]["schemas"]
     video_responses = schema["paths"]["/api/videos/process"]["post"]["responses"]
-    for status in ("400", "403", "404", "422", "429", "500", "502", "503", "504"):
+    for status in ("400", "404", "422", "500", "502", "503"):
         assert video_responses[status]["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorResponse")
     assert models["VideoProcessResponse"]["properties"]["mode"]["const"] == "real"
     for field in ("title", "duration_seconds"):

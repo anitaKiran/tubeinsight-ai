@@ -2,6 +2,7 @@
 
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from requests import Session
 from youtube_transcript_api import (
@@ -9,12 +10,23 @@ from youtube_transcript_api import (
 )
 
 from app.services import youtube_transcript_service
+from app.repositories import video_repository
+from app.schemas.stored_video import StoredVideo
+from app.schemas.video import TranscriptSegment
 
 
 @pytest.fixture(autouse=True)
 def isolated_caption_environment(monkeypatch, request):
     if request.node.get_closest_marker("integration"):
         return
+    # Empty values prevent load_dotenv from reintroducing private configuration.
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
+    monkeypatch.setenv("SUPABASE_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("TRANSCRIPT_SOURCE", "supabase")
+    monkeypatch.setenv("VERCEL", "")
+    monkeypatch.setenv("VERCEL_ENV", "")
+    monkeypatch.setenv("APP_ENV", "development")
     for key, value in {
         "YOUTUBE_CAPTION_LANGUAGES": "en",
         "YOUTUBE_CAPTION_FALLBACK": "true",
@@ -28,6 +40,7 @@ def isolated_caption_environment(monkeypatch, request):
         raise AssertionError("Automated tests must mock external YouTube requests.")
 
     monkeypatch.setattr(Session, "send", forbidden_send)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", forbidden_send)
 
 
 @pytest.fixture
@@ -56,3 +69,40 @@ def caption_api(monkeypatch, make_track):
     factory = Mock(return_value=client)
     monkeypatch.setattr(youtube_transcript_service, "YouTubeTranscriptApi", factory)
     return client
+
+
+@pytest.fixture
+def make_record():
+    def create(video_id="dQw4w9WgXcQ", **overrides):
+        values = {
+            "video_id": video_id,
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "thumbnail_url": f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+            "language": "en",
+            "transcript": [
+                TranscriptSegment(start_seconds=0.25, end_seconds=4.75, text="Caption fixture: first sentence."),
+                TranscriptSegment(start_seconds=4.0, end_seconds=6.125, text="Caption fixture: second sentence."),
+            ],
+        }
+        values.update(overrides)
+        return StoredVideo(**values)
+    return create
+
+
+@pytest.fixture
+def saved_videos(monkeypatch):
+    """Repository seam only; repository/SDK tests exercise actual persistence code."""
+    records = {}
+
+    def get(video_id):
+        row = records.get(video_id)
+        return row.model_copy(deep=True) if row else None
+
+    def upsert(record):
+        validated = StoredVideo.model_validate(record.model_dump())
+        records[record.video_id] = validated
+        return validated.model_copy(deep=True)
+
+    monkeypatch.setattr(video_repository, "get_video", Mock(side_effect=get))
+    monkeypatch.setattr(video_repository, "upsert_video", Mock(side_effect=upsert))
+    return records
