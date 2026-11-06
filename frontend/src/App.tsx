@@ -33,7 +33,6 @@ function App() {
     useState<ProcessVideoResponse | null>(null);
   const [error, setError] = useState("");
   const [isVideoLoading, setIsVideoLoading] = useState(false);
-  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("checking");
 
@@ -114,7 +113,6 @@ function App() {
     setIsVideoLoading(true);
     setError("");
     setProcessedVideo(null);
-    setThumbnailFailed(false);
     resetChat();
 
     try {
@@ -386,18 +384,21 @@ function App() {
                   </p>
                 )}
 
-                {!thumbnailFailed ? (
-                  <img
-                    className="video-thumbnail"
-                    src={video.thumbnail_url}
-                    alt="Thumbnail of the linked YouTube video"
-                    onError={() => setThumbnailFailed(true)}
+                <div className="video-player-container">
+                  <iframe
+                    key={video.id}
+                    className="video-player"
+                    src={`https://www.youtube.com/embed/${video.id}`}
+                    title={video.title ?? "Selected YouTube video"}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allowFullScreen
                   />
-                ) : (
-                  <div className="empty-state">
-                    <p>Thumbnail unavailable. You can still open the video.</p>
-                  </div>
-                )}
+                </div>
+
+                <p className="helper-text">
+                  If playback is unavailable here, use the YouTube link below.
+                </p>
 
                 <h3 className="video-title">
                   {video.title ?? "Untitled video"}
