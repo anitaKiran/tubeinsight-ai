@@ -17,7 +17,7 @@ type Message = {
   role: "user" | "assistant";
   text: string;
   sources?: TranscriptSegment[];
-  mode?: "mock";
+  mode?: "mock" | "real";
 };
 
 type ConnectionStatus = "checking" | "connected" | "unavailable";

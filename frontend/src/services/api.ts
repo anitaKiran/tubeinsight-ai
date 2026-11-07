@@ -39,12 +39,16 @@ export function askQuestion(
   payload: ChatRequest,
   signal?: AbortSignal,
 ): Promise<ChatResponse> {
-  return request<ChatResponse>("/api/chat/ask", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
+  return request<ChatResponse>(
+    "/api/chat/ask",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
     },
-    body: JSON.stringify(payload),
-    signal,
-  });
+    60_000,
+  );
 }
