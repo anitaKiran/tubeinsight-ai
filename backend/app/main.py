@@ -52,10 +52,10 @@ def create_app() -> CORSMiddleware:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     api = FastAPI(
         title="tubeInsight-ai API",
-        version="0.4.0",
+        version="0.5.0",
         description=(
             "Supabase-first captions with automatic local extraction in auto mode. "
-            "Production and Vercel use saved captions only. Chat uses video-isolated RAG."
+            "Production and Vercel use saved captions only. Chat uses video-bound tools and persistent Supabase session memory."
         ),
     )
 

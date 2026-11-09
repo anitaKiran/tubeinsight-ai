@@ -56,7 +56,7 @@ def generate_answer(settings, question, documents) -> AnswerDraft:
         return AnswerDraft.model_validate(result)
 
 
-def answer_question(video, question: str) -> tuple[str, list[SourceSegment]]:
+def retrieve_evidence(video, question: str):
     if len(question.encode("utf-8")) > 8000:
         raise ApiException(422, "VALIDATION_ERROR", "Question exceeds the 8000-byte embedding input limit.")
     settings = RagSettings.from_env()
@@ -87,7 +87,14 @@ def answer_question(video, question: str) -> tuple[str, list[SourceSegment]]:
         if not isinstance(score, (int, float)) or not math.isfinite(score) or score < settings.min_score:
             continue
         seen.add(chunk_index)
+        expected.metadata["similarity_score"] = float(score)
         documents.append(expected)
+    return documents
+
+
+def answer_question(video, question: str) -> tuple[str, list[SourceSegment]]:
+    settings = RagSettings.from_env()
+    documents = retrieve_evidence(video, question)
     if not documents:
         return INSUFFICIENT_EVIDENCE, []
     with tracing_context(enabled=False):

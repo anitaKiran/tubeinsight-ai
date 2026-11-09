@@ -63,6 +63,24 @@ def error_responses(*statuses: int, video_processing: bool = False) -> dict:
         ("RAG_TIMEOUT", "AI provider request timed out. Try again later."),
         ("INDEXING_TIMEOUT", "Transcript is saved; local indexing reached its time limit."),
     ])
+    errors[409].append(("CONVERSATION_BUSY", "Another message is being processed in this conversation. Retry shortly."))
+    errors[422].extend([
+        ("INVALID_TIME_RANGE", "Use a valid interval within the configured retrieval window."),
+        ("INVALID_TOOL_ARGUMENTS", "The transcript tool arguments are invalid."),
+        ("SEGMENT_TOO_LARGE", "Request a smaller transcript interval."),
+        ("SUMMARY_TOO_LONG", "Precompute this summary locally, then retry."),
+        ("AGENT_LIMIT_REACHED", "Ask a smaller question within the configured execution limits."),
+    ])
+    errors[500].extend([
+        ("MEMORY_NOT_CONFIGURED", "Apply backend/migrations/002_chat_memory_and_summaries.sql."),
+        ("MODEL_TOOL_INCOMPATIBLE", "Configure a compatible native tool-calling model."),
+    ])
+    errors[502].extend([
+        ("AGENT_TOOL_ERROR", "The transcript tool failed. Please try again."),
+        ("INVALID_CHAT_HISTORY", "The saved conversation is invalid."),
+        ("INVALID_SUMMARY_CACHE", "The saved summary references are invalid."),
+    ])
+    errors[504].append(("AGENT_TIMEOUT", "Chat reached its time limit. Ask a smaller question."))
     responses = {}
     for status in statuses:
         examples = {

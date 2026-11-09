@@ -18,15 +18,14 @@ VIDEO_ID = "dQw4w9WgXcQ"
 
 
 @pytest.mark.parametrize("status,code", [(409, "VIDEO_NOT_INDEXED"), (503, "RAG_UNAVAILABLE"), (429, "RAG_RATE_LIMITED"), (504, "RAG_TIMEOUT"), (500, "CONFIGURATION_ERROR")])
-def test_chat_failure_is_clear_and_never_fake(saved_videos, make_record, monkeypatch, status, code):
+def test_chat_failure_is_clear_and_never_fake(saved_videos, make_record, monkeypatch, status, code, chat_memory):
     saved_videos[VIDEO_ID] = make_record()
-    monkeypatch.setattr(chat_service, "answer_question", Mock(side_effect=ApiException(status, code, "Safe setup or provider error.")))
-    chat_service.conversations.clear()
+    monkeypatch.setattr(chat_service, "run_agent", Mock(side_effect=ApiException(status, code, "Safe setup or provider error.")))
     with TestClient(create_app(), raise_server_exceptions=False) as client:
         response = client.post("/api/chat/ask", json={"video_id": VIDEO_ID, "question": "What does this say?"})
     assert response.status_code == status
     assert response.json() == {"error": {"code": code, "message": "Safe setup or provider error."}}
-    assert not chat_service.conversations
+    assert not chat_memory.sessions
 
 
 def test_local_video_processing_indexes_saved_transcript(saved_videos, make_record):

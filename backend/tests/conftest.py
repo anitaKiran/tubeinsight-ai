@@ -20,6 +20,8 @@ def isolated_caption_environment(monkeypatch, request):
     if request.node.get_closest_marker("integration"):
         return
     # Empty values prevent load_dotenv from reintroducing private configuration.
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "")
     for key in ["OPENAI_API_KEY", "PINECONE_API_KEY"]:
         monkeypatch.setenv(key, "")
     monkeypatch.setenv("OPENAI_CHAT_MODEL", "gpt-6-luna")
@@ -101,7 +103,7 @@ def make_record():
 
 
 @pytest.fixture
-def saved_videos(monkeypatch):
+def saved_videos(monkeypatch, chat_memory):
     """Repository seam only; repository/SDK tests exercise actual persistence code."""
     records = {}
 
@@ -121,8 +123,70 @@ def saved_videos(monkeypatch):
     from app.services import chat_service, video_service
     from app.schemas.chat import SourceSegment
     monkeypatch.setattr(video_service, "ensure_indexed", Mock())
-    monkeypatch.setattr(chat_service, "answer_question", Mock(side_effect=lambda video, question: (
+    monkeypatch.setattr(chat_service, "run_agent", Mock(side_effect=lambda video, question, *args: (
         "Test answer grounded in the caption fixture.",
         [SourceSegment(**video.transcript[0].model_dump())],
     )))
     return records
+
+
+@pytest.fixture
+def chat_memory(monkeypatch):
+    """A fake persistent repository shared by fresh apps within a test."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from threading import Lock
+    from app.repositories import chat_repository as repo
+    from app.schemas.error import ApiException
+    store = SimpleNamespace(sessions={}, messages={}, summaries={}, lock=Lock())
+
+    def claim(session_id, video_id, seconds=75):
+        with store.lock:
+            fresh = session_id is None
+            if fresh:
+                session_id = uuid4()
+                store.sessions[session_id] = {"video_id": video_id, "revision": 0, "token": None}
+                store.messages[session_id] = []
+            row = store.sessions.get(session_id)
+            if row is None or row["video_id"] != video_id:
+                raise ApiException(404, "CONVERSATION_NOT_FOUND", "Conversation not found for this video.")
+            if row["token"] is not None:
+                raise ApiException(409, "CONVERSATION_BUSY", "Another message is being processed.")
+            row["token"] = uuid4()
+            return repo.Claim(session_id, row["token"], row["revision"], fresh)
+
+    def history(claim, max_messages, max_chars):
+        rows = store.messages[claim.session_id][-max_messages:]
+        while rows and sum(len(row["content"]) for row in rows) > max_chars:
+            rows = rows[1:]
+        while rows and rows[0]["role"] != "user":
+            rows = rows[1:]
+        return [dict(row) for row in rows]
+
+    def finish(claim, question, answer):
+        with store.lock:
+            row = store.sessions[claim.session_id]
+            if row["token"] != claim.token or row["revision"] != claim.revision:
+                raise ApiException(409, "CONVERSATION_BUSY", "The conversation changed.")
+            messages = store.messages[claim.session_id]
+            for role, content in [("user", question), ("assistant", answer)]:
+                messages.append({"role": role, "content": content, "sequence_number": len(messages)})
+            row["revision"] += 1
+            row["token"] = None
+
+    def release(claim):
+        row = store.sessions.get(claim.session_id)
+        if row and row["token"] == claim.token:
+            if claim.fresh and row["revision"] == 0:
+                del store.sessions[claim.session_id]
+                del store.messages[claim.session_id]
+            else:
+                row["token"] = None
+
+    monkeypatch.setattr(repo, "claim_session", claim)
+    monkeypatch.setattr(repo, "get_history", history)
+    monkeypatch.setattr(repo, "finish_exchange", finish)
+    monkeypatch.setattr(repo, "release_session", release)
+    monkeypatch.setattr(repo, "get_summary", lambda key, video_id: store.summaries.get((key, video_id)))
+    monkeypatch.setattr(repo, "save_summary", lambda key, video_id, result: store.summaries.__setitem__((key, video_id), result))
+    return store
