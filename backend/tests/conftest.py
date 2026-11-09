@@ -20,6 +20,13 @@ def isolated_caption_environment(monkeypatch, request):
     if request.node.get_closest_marker("integration"):
         return
     # Empty values prevent load_dotenv from reintroducing private configuration.
+    for key in ["OPENAI_API_KEY", "PINECONE_API_KEY"]:
+        monkeypatch.setenv(key, "")
+    monkeypatch.setenv("OPENAI_CHAT_MODEL", "gpt-6-luna")
+    monkeypatch.setenv("PINECONE_EMBEDDING_MODEL", "llama-text-embed-v2")
+    monkeypatch.setenv("PINECONE_EMBEDDING_FIELD", "chunk_text")
+    monkeypatch.setenv("PINECONE_EMBEDDING_DIMENSIONS", "1024")
+    monkeypatch.setenv("PINECONE_INDEX_NAME", "tubeinsight-chunks")
     monkeypatch.setenv("SUPABASE_URL", "")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
     monkeypatch.setenv("SUPABASE_TIMEOUT_SECONDS", "10")
@@ -41,6 +48,10 @@ def isolated_caption_environment(monkeypatch, request):
 
     monkeypatch.setattr(Session, "send", forbidden_send)
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", forbidden_send)
+    import httpx2
+    import urllib3
+    monkeypatch.setattr(httpx2.HTTPTransport, "handle_request", forbidden_send)
+    monkeypatch.setattr(urllib3.PoolManager, "request", forbidden_send)
 
 
 @pytest.fixture
@@ -105,4 +116,13 @@ def saved_videos(monkeypatch):
 
     monkeypatch.setattr(video_repository, "get_video", Mock(side_effect=get))
     monkeypatch.setattr(video_repository, "upsert_video", Mock(side_effect=upsert))
+    # Existing transcript/API tests mock the new RAG seams explicitly. Dedicated
+    # RAG tests below exercise the actual indexing/retrieval implementations.
+    from app.services import chat_service, video_service
+    from app.schemas.chat import SourceSegment
+    monkeypatch.setattr(video_service, "ensure_indexed", Mock())
+    monkeypatch.setattr(chat_service, "answer_question", Mock(side_effect=lambda video, question: (
+        "Test answer grounded in the caption fixture.",
+        [SourceSegment(**video.transcript[0].model_dump())],
+    )))
     return records

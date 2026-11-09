@@ -12,7 +12,7 @@ from app.db import supabase_client
 from app.main import create_app
 from app.repositories import video_repository
 from app.schemas.error import ApiException
-from app.services import mock_chat_service, youtube_transcript_service
+from app.services import chat_service, youtube_transcript_service
 
 VIDEO_ID = "dQw4w9WgXcQ"
 KEY = "sb_secret_test_only_not_a_real_key"
@@ -187,14 +187,16 @@ def test_fresh_api_instances_read_saved_data_without_youtube(sdk_store, make_rec
             assert response.status_code == 200
             assert response.json()["transcript"] == record.model_dump(mode="json")["transcript"]
             assert response.json()["mode"] == "real"
-    mock_chat_service.conversations.clear()
+    from app.schemas.chat import SourceSegment
+    monkeypatch.setattr(chat_service, "answer_question", lambda video, question: ("Grounded test answer.", [SourceSegment(**video.transcript[0].model_dump())]))
+    chat_service.conversations.clear()
     try:
         with TestClient(create_app()) as client:
             chat = client.post("/api/chat/ask", json={"video_id": VIDEO_ID, "question": "Hello"})
             assert chat.status_code == 200
-            assert chat.json()["mode"] == "mock"
+            assert chat.json()["mode"] == "real"
     finally:
-        mock_chat_service.conversations.clear()
+        chat_service.conversations.clear()
     forbidden.assert_not_called()
     assert [r.method for r in sdk_store[1]] == ["POST", "GET", "GET", "GET"]
 
@@ -210,6 +212,7 @@ def test_invalid_source_fails_closed_before_database_or_youtube(sdk_store, monke
 
 
 def test_source_defaults_to_supabase(sdk_store, make_record, monkeypatch):
+    monkeypatch.setattr("app.services.video_service.ensure_indexed", Mock())
     monkeypatch.delenv("TRANSCRIPT_SOURCE", raising=False)
     video_repository.upsert_video(make_record())
     from app.services.video_service import process_video

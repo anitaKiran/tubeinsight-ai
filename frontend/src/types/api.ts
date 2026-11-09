@@ -41,7 +41,7 @@ export interface ChatRequest {
 export interface ChatResponse {
   video_id: string;
   conversation_id: string;
-  mode: "mock" | "real";
+  mode: "real";
   answer: string;
   sources: TranscriptSegment[];
 }

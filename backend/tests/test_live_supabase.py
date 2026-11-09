@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.repositories import video_repository
-from app.services import ingestion_service, mock_chat_service, youtube_transcript_service
+from app.services import ingestion_service, chat_service, youtube_transcript_service
 
 
 @pytest.mark.integration
@@ -30,7 +30,9 @@ def test_live_ingestion_and_persistent_api_reads(monkeypatch):
     monkeypatch.setattr(youtube_transcript_service, "fetch_transcript_data", forbidden_fetch)
     assert ingestion_service.ingest_video(url).cached is True
     monkeypatch.setenv("TRANSCRIPT_SOURCE", "supabase")
-    mock_chat_service.conversations.clear()
+    monkeypatch.setenv("VERCEL", "1")  # This storage-only check must not buy RAG calls.
+    monkeypatch.setattr(chat_service, "answer_question", lambda video, question: ("Storage-only test answer.", []))
+    chat_service.conversations.clear()
     try:
         for _ in range(2):
             with TestClient(create_app()) as client:
@@ -41,7 +43,7 @@ def test_live_ingestion_and_persistent_api_reads(monkeypatch):
         with TestClient(create_app()) as client:
             response = client.post("/api/chat/ask", json={"video_id": video_id, "question": "Hello"})
             assert response.status_code == 200
-            assert response.json()["mode"] == "mock"
+            assert response.json()["mode"] == "real"
     finally:
-        mock_chat_service.conversations.clear()
+        chat_service.conversations.clear()
     print(f"Verified saved video {video_id}: {len(first.transcript)} segments; language={first.language}")
