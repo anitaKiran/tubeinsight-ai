@@ -350,9 +350,17 @@ function App() {
               <button
                 className="primary-button"
                 type="submit"
-                disabled={isVideoLoading || !videoUrl.trim()}
+                disabled={isVideoLoading}
+                aria-busy={isVideoLoading}
               >
-                {isVideoLoading ? "Processing..." : "Analyse video"}
+              {isVideoLoading ? (
+                <>
+                <span className="button-spinner" aria-hidden="true" />
+                Analysing video…
+                </>
+              ) : (
+                "Analyse video"
+              )}
               </button>
             </div>
 
@@ -568,15 +576,15 @@ function App() {
             </div>
 
             {isChatLoading && (
-              <p className="helper-text" role="status">
-                Waiting for an answer...
-              </p>
-            )}
-
-            {chatError && (
-              <p id="chat-error" className="error-text" role="alert">
-                {chatError}
-              </p>
+               <div className="chat-loading" role="status" aria-live="polite">
+                  <span className="chat-loading-spinner" aria-hidden="true" />
+                  <div>
+                    <p className="chat-loading-title">Preparing your answer…</p>
+                    <p className="chat-loading-description">
+                      This may take a few moments.
+                    </p>
+                    </div>
+                  </div>
             )}
 
             <form
