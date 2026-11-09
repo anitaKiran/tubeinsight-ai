@@ -175,7 +175,7 @@ def test_database_failures_never_leak_secrets(sdk_store, monkeypatch, caplog, fa
     assert all(client.is_closed for client in sdk_store[2])
 
 
-def test_fresh_api_instances_read_saved_data_without_youtube(sdk_store, make_record, monkeypatch):
+def test_fresh_api_instances_read_saved_data_without_youtube(sdk_store, make_record, monkeypatch, chat_memory):
     record = video_repository.upsert_video(make_record())
     forbidden = Mock(side_effect=AssertionError("Production must never fetch YouTube."))
     monkeypatch.setattr(youtube_transcript_service, "fetch_transcript_data", forbidden)
@@ -188,15 +188,14 @@ def test_fresh_api_instances_read_saved_data_without_youtube(sdk_store, make_rec
             assert response.json()["transcript"] == record.model_dump(mode="json")["transcript"]
             assert response.json()["mode"] == "real"
     from app.schemas.chat import SourceSegment
-    monkeypatch.setattr(chat_service, "answer_question", lambda video, question: ("Grounded test answer.", [SourceSegment(**video.transcript[0].model_dump())]))
-    chat_service.conversations.clear()
+    monkeypatch.setattr(chat_service, "run_agent", lambda video, question, *args: ("Grounded test answer.", [SourceSegment(**video.transcript[0].model_dump())]))
     try:
         with TestClient(create_app()) as client:
             chat = client.post("/api/chat/ask", json={"video_id": VIDEO_ID, "question": "Hello"})
             assert chat.status_code == 200
             assert chat.json()["mode"] == "real"
     finally:
-        chat_service.conversations.clear()
+        pass
     forbidden.assert_not_called()
     assert [r.method for r in sdk_store[1]] == ["POST", "GET", "GET", "GET"]
 

@@ -20,10 +20,9 @@ VIDEO_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
 
 
 @pytest.fixture
-def client(monkeypatch, saved_videos, make_record):
+def client(monkeypatch, saved_videos, make_record, chat_memory):
     monkeypatch.setenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
     saved_videos.clear()
-    chat_service.conversations.clear()
     saved_videos[VIDEO_ID] = make_record()
     saved_videos[OTHER_VIDEO_ID] = make_record(OTHER_VIDEO_ID)
 
@@ -34,7 +33,6 @@ def client(monkeypatch, saved_videos, make_record):
     with TestClient(create_app(), raise_server_exceptions=False) as test_client:
         yield test_client
     saved_videos.clear()
-    chat_service.conversations.clear()
 
 
 def assert_error(response, status, code):
@@ -159,11 +157,11 @@ def test_uncached_video_never_falls_back_to_youtube(client, saved_videos, captio
     caption_api.list.assert_not_called()
 
 
-def test_only_conversation_state_is_lost_on_restart(client):
+def test_conversation_state_survives_a_fresh_app(client):
     process(client)
     conversation_id = ask(client).json()["conversation_id"]
-    chat_service.conversations.clear()
-    assert_error(ask(client, conversation_id=conversation_id), 404, "CONVERSATION_NOT_FOUND")
+    with TestClient(create_app()) as fresh:
+        assert ask(fresh, conversation_id=conversation_id).status_code == 200
     assert ask(client).status_code == 200
 
 
@@ -184,7 +182,7 @@ def test_chat_creates_conversation_and_returns_transcript_source(client):
     assert UUID(body["conversation_id"]).version == 4
 
 
-def test_followup_reuses_conversation_and_stores_history(client):
+def test_followup_reuses_conversation_and_stores_history(client, chat_memory):
     process(client)
     first = ask(client).json()
     conversation_id = first["conversation_id"]
@@ -193,11 +191,11 @@ def test_followup_reuses_conversation_and_stores_history(client):
     response = ask(client, question="  Tell me more.  ", conversation_id=conversation_id)
     assert response.status_code == 200
     assert response.json()["conversation_id"] == conversation_id
-    history = chat_service.conversations[UUID(conversation_id)].history
-    assert [turn.question for turn in history] == [
+    history = chat_memory.messages[UUID(conversation_id)]
+    assert [turn["content"] for turn in history if turn["role"] == "user"] == [
         "What is this video about?", "Tell me more."
     ]
-    assert all(turn.answer == "Test answer grounded in the caption fixture." for turn in history)
+    assert all(turn["content"] == "Test answer grounded in the caption fixture." for turn in history if turn["role"] == "assistant")
 
 
 def test_new_chats_have_distinct_conversations(client):
@@ -205,19 +203,19 @@ def test_new_chats_have_distinct_conversations(client):
     assert ask(client).json()["conversation_id"] != ask(client).json()["conversation_id"]
 
 
-def test_unknown_video(client, saved_videos):
+def test_unknown_video(client, saved_videos, chat_memory):
     saved_videos.clear()
     assert_error(ask(client), 404, "VIDEO_NOT_FOUND")
-    assert chat_service.conversations == {}
+    assert chat_memory.sessions == {}
 
 
-def test_unknown_conversation(client):
+def test_unknown_conversation(client, chat_memory):
     process(client)
     assert_error(ask(client, conversation_id=str(uuid4())), 404, "CONVERSATION_NOT_FOUND")
-    assert chat_service.conversations == {}
+    assert chat_memory.sessions == {}
 
 
-def test_conversation_cannot_change_video(client):
+def test_conversation_cannot_change_video(client, chat_memory):
     process(client)
     process(client, OTHER_VIDEO_ID)
     conversation_id = ask(client).json()["conversation_id"]
@@ -225,7 +223,7 @@ def test_conversation_cannot_change_video(client):
         ask(client, video_id=OTHER_VIDEO_ID, conversation_id=conversation_id),
         404, "CONVERSATION_NOT_FOUND",
     )
-    assert len(chat_service.conversations[UUID(conversation_id)].history) == 1
+    assert len(chat_memory.messages[UUID(conversation_id)]) == 2
 
 
 @pytest.mark.parametrize("payload", [{}, {"url": None}, {"url": 123}, {"url": []}])
@@ -238,10 +236,10 @@ def test_video_request_validation(client, payload):
     {"video_id": "bad"}, {"video_id": None}, {"video_id": 123},
     {"conversation_id": "not-a-uuid"}, {"conversation_id": ""}, {"conversation_id": 123},
 ])
-def test_chat_request_validation(client, overrides):
+def test_chat_request_validation(client, overrides, chat_memory):
     process(client)
     assert_error(ask(client, **overrides), 422, "VALIDATION_ERROR")
-    assert chat_service.conversations == {}
+    assert chat_memory.sessions == {}
 
 
 @pytest.mark.parametrize("payload", [{}, {"video_id": VIDEO_ID}, {"question": "Hello"}])
