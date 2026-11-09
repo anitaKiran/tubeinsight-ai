@@ -67,7 +67,7 @@ export async function requestJson<T>(
     if (callerSignal?.aborted) throw callerSignal.reason;
     if (timedOut) {
       throw new ApiError(
-        "The backend took too long to respond. Please try again. If this continues, restart the backend.",
+        "The request took too long. Please try again.",
         "REQUEST_TIMEOUT",
         0,
       );
@@ -76,7 +76,7 @@ export async function requestJson<T>(
     if (error instanceof Error && error.name === "AbortError") throw error;
 
     throw new ApiError(
-      "Cannot reach the backend. Check that it is running and allows this frontend address.",
+      "We couldn’t connect to the server. Please try again in a moment.",
       "NETWORK_ERROR",
       0,
     );

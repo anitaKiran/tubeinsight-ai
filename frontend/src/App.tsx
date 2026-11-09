@@ -33,7 +33,6 @@ function App() {
     useState<ProcessVideoResponse | null>(null);
   const [error, setError] = useState("");
   const [isVideoLoading, setIsVideoLoading] = useState(false);
-  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("checking");
 
@@ -48,9 +47,12 @@ function App() {
   const chatRequestRef = useRef<AbortController | null>(null);
   const chatRequestIdRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const playerRef = useRef<HTMLIFrameElement | null>(null);
 
   const video = processedVideo?.video ?? null;
   const isMock = processedVideo?.mode === "mock";
+
+  const [activeTab, setActiveTab] = useState<"chat" | "transcript">("chat");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -83,6 +85,22 @@ function App() {
     }
   }, [messages]);
 
+  function playAtTimestamp(seconds: number) {
+  if (!video || !playerRef.current || !Number.isFinite(seconds)) {
+    return;
+  }
+
+  const start = Math.max(0, Math.floor(seconds));
+
+  playerRef.current.src =
+    `https://www.youtube.com/embed/${video.id}?start=${start}&autoplay=1`;
+
+  playerRef.current.scrollIntoView({
+    behavior: "smooth",
+    block: "center",
+  });
+}
+
   function resetChat() {
     chatRequestRef.current?.abort();
     chatRequestRef.current = null;
@@ -93,6 +111,7 @@ function App() {
     setQuestion("");
     setChatError("");
     setIsChatLoading(false);
+    setActiveTab("chat");
   }
 
   async function handleLoadVideo(event: FormEvent<HTMLFormElement>) {
@@ -111,7 +130,6 @@ function App() {
     setIsVideoLoading(true);
     setError("");
     setProcessedVideo(null);
-    setThumbnailFailed(false);
     resetChat();
 
     try {
@@ -245,7 +263,6 @@ function App() {
     setProcessedVideo(null);
     setError("");
     setIsVideoLoading(false);
-    setThumbnailFailed(false);
   }
 
   const connectionLabel =
@@ -383,18 +400,22 @@ function App() {
                   </p>
                 )}
 
-                {!thumbnailFailed ? (
-                  <img
-                    className="video-thumbnail"
-                    src={video.thumbnail_url}
-                    alt="Thumbnail of the linked YouTube video"
-                    onError={() => setThumbnailFailed(true)}
+                <div className="video-player-container">
+                 <iframe
+                    ref={playerRef}
+                    key={video.id}
+                    className="video-player"
+                    src={`https://www.youtube.com/embed/${video.id}`}
+                    title={video.title ?? "Selected YouTube video"}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allowFullScreen
                   />
-                ) : (
-                  <div className="empty-state">
-                    <p>Thumbnail unavailable. You can still open the video.</p>
-                  </div>
-                )}
+                </div>
+
+                <p className="helper-text">
+                  If playback is unavailable here, use the YouTube link below.
+                </p>
 
                 <h3 className="video-title">
                   {video.title ?? "Untitled video"}
@@ -415,32 +436,6 @@ function App() {
                 >
                   Open actual video on YouTube ↗
                 </a>
-
-                <details className="transcript-preview">
-                  <summary>
-                    {isMock ? "Simulated transcript" : "Transcript"}
-                  </summary>
-
-                  {processedVideo.transcript.length === 0 ? (
-                    <p className="helper-text">
-                      No transcript segments were returned.
-                    </p>
-                  ) : (
-                    processedVideo.transcript.map((segment, index) => (
-                      <div className="transcript-segment" key={index}>
-                        <a
-                          href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(segment.start_seconds)}s`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`Open video at ${formatTimestamp(segment.start_seconds)}${isMock ? "; simulated source timestamp" : ""}`}
-                        >
-                          {formatTimestamp(segment.start_seconds)}
-                        </a>
-                        <p>{segment.text}</p>
-                      </div>
-                    ))
-                  )}
-                </details>
               </div>
             ) : (
               <div className="empty-state">
@@ -456,9 +451,32 @@ function App() {
             aria-labelledby="chat-heading"
           >
             <div className="panel-heading">
+              <h2 id="chat-heading">Explore this video</h2>
               <h2 id="chat-heading">Ask tubeInsight</h2>
               <span className="chat-label">Video Q&amp;A</span>
             </div>
+          
+          <div className="workspace-tabs" aria-label="Video views">
+            <button
+            type="button"
+            className={`workspace-tab ${activeTab === "chat" ? "is-active" : ""}`}
+            aria-pressed={activeTab === "chat"}
+            aria-controls="chat-view"
+            onClick={() => setActiveTab("chat")}
+          >
+            Chat
+           </button>
+           
+           <button
+              type="button"
+              className={`workspace-tab ${activeTab === "transcript" ? "is-active" : ""}`}
+              aria-pressed={activeTab === "transcript"}
+              aria-controls="transcript-view"
+              onClick={() => setActiveTab("transcript")}
+            >
+            Transcript
+          </button>
+        </div>
 
             {isMock && (
               <p className="mock-notice" role="note">
@@ -467,6 +485,11 @@ function App() {
               </p>
             )}
 
+          <div
+              id="chat-view"
+              className="chat-view"
+              hidden={activeTab !== "chat"}
+            >
             <div
               className="messages"
               role="log"
@@ -512,6 +535,18 @@ function App() {
                           {message.sources.map((source, index) => (
                             <a
                               className="source-card"
+                              onClick={(event) => {
+                              if (
+                                  event.ctrlKey ||
+                                  event.metaKey ||
+                                  event.shiftKey ||
+                                  event.altKey
+                                ) {
+                                  return;
+                              }
+                            event.preventDefault();
+                            playAtTimestamp(source.start_seconds);
+                          }}
                               key={`${source.start_seconds}-${index}`}
                               href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(source.start_seconds)}s`}
                               target="_blank"
@@ -582,6 +617,70 @@ function App() {
             <p className="chat-disclaimer">
               Check the sources when reviewing an answer.
             </p>
+            </div>
+
+            <div
+              id="transcript-view"
+              className="transcript-view"
+              hidden={activeTab !== "transcript"}
+            >
+            {!video || !processedVideo ? (
+              <div className="chat-empty-state">
+                <h3>No transcript yet</h3>
+                <p>Analyse a video to view its transcript.</p>
+              </div>
+  ) : processedVideo.transcript.length === 0 ? (
+    <div className="chat-empty-state">
+      <h3>Transcript unavailable</h3>
+      <p>No transcript segments were returned for this video.</p>
+    </div>
+  ) : (
+    <>
+      <p className="helper-text">
+        {processedVideo.transcript.length} transcript segments.
+        Select a timestamp to play that moment in the video above.
+      </p>
+
+      <div className="transcript-list">
+        {processedVideo.transcript.map((segment, index) => (
+          <div
+            className="transcript-segment"
+            key={`${segment.start_seconds}-${index}`}
+          >
+            <a
+               onClick={(event) => {
+                if (
+                  event.ctrlKey ||
+                  event.metaKey ||
+                  event.shiftKey ||
+                  event.altKey
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                playAtTimestamp(segment.start_seconds);
+              }}
+              href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(
+                segment.start_seconds,
+              )}s`}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Open video at ${formatTimestamp(
+                segment.start_seconds,
+              )}${isMock ? "; simulated timestamp" : ""}`}
+            >
+              {formatTimestamp(segment.start_seconds)}
+            </a>
+
+            <p>{segment.text}</p>
+          </div>
+        ))}
+      </div>
+    </>
+  )}
+</div>
+
+
           </section>
         </div>
       </main>

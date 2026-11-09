@@ -656,4 +656,73 @@ input::placeholder {
 .source-timestamp {
   color: #c62828;
   font-weight: 600;
+} 
+
+.workspace-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.workspace-tab {
+  padding: 12px 16px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #71717a;
+  font-weight: 600;
+}
+
+.workspace-tab:hover {
+  color: #18181b;
+  background: #fafafa;
+}
+
+.workspace-tab.is-active {
+  color: #c62828;
+  border-bottom-color: #e53935;
+}
+
+.chat-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-view[hidden],
+.transcript-view[hidden] {
+  display: none;
+}
+
+.transcript-view {
+  flex: 1;
+  min-width: 0;
+}
+
+.transcript-list {
+  max-height: 440px;
+  overflow-y: auto;
+  padding: 8px 4px 16px;
+}
+
+.transcript-list .transcript-segment {
+  padding: 16px 0;
+  border-bottom: 1px solid #eeeeef;
+}
+
+.video-player-container {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #18181b;
+}
+
+.video-player {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
 }
