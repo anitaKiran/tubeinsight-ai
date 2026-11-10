@@ -12,7 +12,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
 
-from app.routers import chat, health, videos
+from app.routers import audio, chat, health, videos
+from app.audio_upload import AudioUploadLimitMiddleware
 from app.schemas.error import ApiError, ApiException, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ def create_app() -> CORSMiddleware:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     api = FastAPI(
         title="tubeInsight-ai API",
-        version="0.5.0",
+        version="0.6.0",
         description=(
             "Supabase-first captions with automatic local extraction in auto mode. "
             "Production and Vercel use saved captions only. Chat uses video-bound tools and persistent Supabase session memory."
@@ -93,6 +94,8 @@ def create_app() -> CORSMiddleware:
     api.include_router(health.router)
     api.include_router(videos.router)
     api.include_router(chat.router)
+    api.include_router(audio.router)
+    api.add_middleware(AudioUploadLimitMiddleware)
 
     # Wrap the entire app so even unexpected 500 responses receive CORS headers.
     return CORSMiddleware(
