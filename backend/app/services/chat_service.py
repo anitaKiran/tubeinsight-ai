@@ -20,7 +20,8 @@ def ask_question(video_id: str, question: str, conversation_id: UUID | None) -> 
     budget = Budget(settings)
     question = redact(question)
     with observe_request(video_id):
-        video = video_repository.get_video(video_id)
+        with operation("transcript.lookup", "retriever"):
+            video = video_repository.get_video(video_id)
         if video is None:
             raise ApiException(404, "VIDEO_NOT_FOUND", "This video has not been prepared yet.")
         with operation("memory.claim"):

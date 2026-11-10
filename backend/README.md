@@ -1,5 +1,187 @@
 # tubeInsight-ai — Transcript caching and real video RAG
 
+## Day 4 — Audio questions and evaluation (API 0.6.0)
+
+Backend-only addition. Existing video/chat schemas, transcript caching, tools,
+Supabase memory, and the user-selected Pinecone Llama index remain compatible.
+No migration is needed. Only `python-multipart==0.0.33` is added; install backend
+requirements in the existing venv. No frontend files or documentation change.
+
+### Audio endpoint and Postman
+
+`POST http://localhost:8000/api/audio/transcribe` takes multipart/form-data with
+one required **file** field (`UploadFile`). In Postman choose Body → form-data →
+key `file` → change Text to File → select a short recording. Let Postman set
+Content-Type and the multipart boundary. Swagger `/docs` also has a file picker.
+
+```json
+{"text":"What are the main topics in this video?","language":null,"model":"gpt-transcribe"}
+```
+
+Language is populated only for a single explicit detected provider language code.
+Speech stays in its original language. There is no translation or automatic chat
+request. Submit the returned text to the unchanged `/api/chat/ask` endpoint:
+
+```json
+{"video_id":"YOUR_CACHED_VIDEO_ID","question":"What are the main topics in this video?","conversation_id":null}
+```
+
+PowerShell upload example (replace the recording path):
+
+```powershell
+curl.exe -X POST http://localhost:8000/api/audio/transcribe -F "file=@C:/recordings/question.webm"
+```
+
+Accepted formats: MP3, MP4, MPEG, MPGA, M4A, PCM WAV, WebM with Opus/Vorbis.
+The backend checks actual WAV structure or compressed-container signatures;
+filename and declared MIME alone are insufficient. Deep codec validation remains
+with OpenAI. PCM silence is rejected locally; compressed non-speech relies on the
+provider. Recognition can be wrong: review the transcribed question. No FFmpeg or
+local Whisper dependencies are added. No canned speech output is returned.
+
+Default file cap: **4,000,000 bytes (4 decimal MB)**. The whole multipart body is
+bounded before parsing to file cap + 64,000 bytes, also for chunked requests.
+Upload reception has a 15-second deadline. OpenAI's timeout defaults to 20 seconds
+(1–30 allowed), max_retries=0. Socket timeouts are not hard process-kill deadlines.
+Buffers and temporary FastAPI multipart spools are closed/released on success or
+failure. Audio is not saved permanently or sent to Supabase, Pinecone or LangSmith.
+
+| HTTP | Audio codes |
+| --- | --- |
+| 400 | AUDIO_EMPTY, AUDIO_INVALID (malformed length) |
+| 408 | AUDIO_UPLOAD_TIMEOUT |
+| 413 | AUDIO_TOO_LARGE |
+| 415 | AUDIO_UNSUPPORTED_FORMAT |
+| 422 | VALIDATION_ERROR (missing file), AUDIO_INVALID, AUDIO_NO_SPEECH |
+| 429 | AUDIO_RATE_LIMITED |
+| 500 | CONFIGURATION_ERROR (missing key/invalid limits) |
+| 502 | AUDIO_TRANSCRIPTION_FAILED |
+| 503 | AUDIO_UNAVAILABLE (connection/account/model access) |
+| 504 | AUDIO_TIMEOUT |
+
+All use `{"error":{"code":"...","message":"..."}}`. Provider error bodies,
+filenames, keys and audio contents are not logged or echoed in errors.
+
+### Environment and Vercel
+
+Keep existing variables and configure these backend-only defaults:
+
+```dotenv
+OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe
+MAX_AUDIO_UPLOAD_MB=4
+AUDIO_TIMEOUT_SECONDS=20
+EVALUATION_ENABLE_LIVE=false
+EVALUATION_OUTPUT_DIR=reports/evaluation
+```
+
+In Vercel → project → Settings → Environment Variables, set OPENAI_API_KEY
+privately and add the model, size and timeout values for the intended environments.
+Keep APP_ENV=production, TRANSCRIPT_SOURCE=supabase and EVALUATION_ENABLE_LIVE=false.
+Keep existing Supabase/Pinecone and optional LangSmith settings. After a later
+manual redeploy, verify `/openapi.json` version 0.6.0, upload in Postman against the
+deployed base URL, then pass the result to `/api/chat/ask` for an already cached,
+indexed video. This task does not deploy or add a microphone interface.
+
+[Vercel Functions limit request bodies to 4.5 MB](https://vercel.com/docs/functions/limitations).
+Platform rejection happens before this app and may use Vercel's own 413 envelope.
+OpenAI's larger upload allowance does not change the hosting limit. Longer audio
+needs a separate reviewed storage/upload workflow in a future task.
+
+Audio/chat trigger paid requests. For public production access, use authenticated
+users, durable per-user/IP quotas or a gateway limiter, suitable Vercel Firewall
+rules, concurrency controls, and OpenAI project spend caps/alerts. CORS is not
+authentication; an in-memory limiter is not a global Vercel quota. This task does
+not implement a new authentication system or durable limiter. See the
+[official OpenAI file-transcription guidance](https://developers.openai.com/api/docs/guides/speech-to-text)
+for model support and current pricing links. No paid audio test runs automatically.
+
+### Evaluation commands (from backend/, venv activated)
+
+```powershell
+python -m pytest -q
+python -m app.evaluation.run --mode offline
+```
+
+Offline is the default: scripted providers, no paid calls, no external services,
+no LangSmith uploads. The CLI blocks remote transports; Windows asyncio's internal
+loopback wakeup pipe remains allowed. It exercises actual services/tools and audio
+request handling. Reports are timestamped JSON, Markdown and CSV under
+`reports/evaluation/`; override with EVALUATION_OUTPUT_DIR or `--output-dir`.
+No `/api/evaluate` endpoint exists.
+
+[Dataset schema, fixture provenance, curation and human review rubric](evaluation/README.md).
+The 18-case synthetic dataset covers facts, absent information, timestamps and
+out-of-range requests, whole/interval summaries, memory, single/combined tools,
+and six audio outcomes. It is a regression suite, not real model quality evidence.
+`curated.json` is an **unreviewed real-video template**, not verified ground truth.
+Before live use, replace its references after full-transcript review and pin each
+video's transcript SHA256. Changed transcripts invalidate references.
+
+Only when you intend to incur charges, with reviewed cached/indexed videos:
+
+```powershell
+$env:EVALUATION_ENABLE_LIVE = "true"
+python -m app.evaluation.run --mode live --enable-live --dataset curated --max-examples 3 --max-model-calls 12
+Remove-Item Env:EVALUATION_ENABLE_LIVE
+```
+
+Both environment and flag are required. A cost warning appears first. Live mode
+is sequential, limited to 1–5 examples, at most three turns each, and at most 30
+OpenAI call reservations across the entire run (default 12). Audio and optional
+judge calls share that cap; validation-only audio conservatively reserves a call.
+Each chat retains its existing resource bounds. Pinecone search embeddings are
+additional provider work within tool limits. No extraction or indexing runs.
+Test conversations/summaries persist normally in Supabase; no automatic deletion.
+
+Optional `--judge` sends selected question/reference/answer/verified sources to
+OpenAI using the documented rubric, never raw audio or full conversation history.
+It is a fallible semantic estimate. To measure live ASR, add a reviewed audio case
+with known text to a private real-level dataset, then use the same guarded CLI.
+Postman uploads also incur charges. Neither was executed automatically here.
+
+### LangSmith, metrics and limits of scores
+
+Existing optional tracing is reused. Request-local events record actual tool
+execution and monotonic timing, not guesses from answer text. Existing chat,
+memory, Pinecone, tools and LLM spans gain durations; `transcript.lookup` includes
+the caption database read, and audio adds `audio.request/transcription`.
+Nested timings overlap and must not be summed. Timing-only request logs contain
+no prompts, answers or recordings.
+
+With LANGSMITH_API_KEY configured privately and live opt-in enabled, optionally add:
+
+```powershell
+python -m app.evaluation.run --mode live --enable-live --dataset curated --max-examples 3 --max-model-calls 12 --upload-langsmith --experiment-name tubeinsight-day4-demo
+```
+
+The installed SDK creates a named dataset containing case IDs and a constant
+reference flag, then replays sanitized measured results as an experiment, without
+rerunning the agent. Feedback includes deterministic scores and original measured
+duration, with model config/revision metadata. Inputs/outputs stay hidden; no
+transcripts, histories or audio are uploaded. LangSmith replay-run durations
+measure replay overhead: use `measured_duration_seconds` feedback or local timings
+for application latency. SDK compatibility is tested; live uploads remain opt-in.
+See [LangSmith evaluation docs](https://docs.langchain.com/langsmith/evaluate-llm-application).
+
+Reports separate mechanical provenance/timestamp/range/video checks from semantic
+correctness/support. Actual tool events measure selection, extra calls, failures
+and call limits. Memory probes cover ordering, persistence over fresh apps,
+independent sessions, cross-video rejection and windows. Mean/p50/p95/max include
+sample sizes and warn that small-sample p95 is unstable. Live WER is normalized
+word edit distance; offline ASR accuracy stays null because speech output is mocked.
+
+Reference phrase coverage is diagnostic and never determines pass/fail. Canonical
+server abstention is recognized exactly, so adding an invented claim to a refusal
+cannot pass merely by keywords. A non-abstaining unsupported response is a failure
+but not alone proof of a specific fabrication. False-answer rate, semantic
+correctness and evidence support remain unknown until judged/reviewed. Mechanical
+passes cannot prove summary coverage or follow-up semantics. Offline fresh-app
+tests do not claim live DB or actual process-restart verification.
+
+Reports omit raw questions, answers, source text, audio and conversation IDs, and
+are Git-ignored. Keep private references/recordings in the ignored `private*`
+locations in the evaluation README. Share only reviewed public data/safe reports.
+
 FastAPI checks Supabase first. In local **auto** mode, submitting a new YouTube
 URL automatically fetches real captions directly, validates them, and saves them
 before returning success. Cached videos skip YouTube. Vercel and explicitly
