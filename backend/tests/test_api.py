@@ -321,7 +321,7 @@ def test_swagger_and_openapi_contract(client):
     response = client.get("/openapi.json")
     assert response.status_code == 200
     schema = response.json()
-    assert set(schema["paths"]) == {"/api/health", "/api/videos/process", "/api/chat/ask"}
+    assert set(schema["paths"]) == {"/api/health", "/api/videos/process", "/api/chat/ask", "/api/audio/transcribe"}
     for path in ("/api/videos/process", "/api/chat/ask"):
         errors = schema["paths"][path]["post"]["responses"]
         for status in ("422", "500"):

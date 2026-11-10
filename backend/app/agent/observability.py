@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
 import os
+import time
 
 from langsmith import Client, tracing_context
 from langsmith.run_helpers import trace
@@ -10,6 +11,20 @@ from urllib3 import Retry
 from app.schemas.error import ApiException
 
 logger = logging.getLogger(__name__)
+_events = ContextVar("tubeinsight_operation_events", default=None)
+
+
+@contextmanager
+def capture_operations():
+    """Request-local, content-free actual execution events, also with tracing off."""
+    events = []
+    token = _events.set(events)
+    try:
+        yield events
+    finally:
+        _events.reset(token)
+
+
 _observer = ContextVar("tubeinsight_observer", default=None)
 
 
@@ -48,6 +63,7 @@ class Observer:
 
 @contextmanager
 def operation(name, run_type="chain"):
+    started = time.monotonic()
     observer = _observer.get()
     context = manager = run = None
     metadata = {}
@@ -73,6 +89,13 @@ def operation(name, run_type="chain"):
         error_code = error.code if isinstance(error, ApiException) else "OPERATION_FAILED"
         raise
     finally:
+        duration = max(0.0, time.monotonic() - started)
+        metadata["duration_seconds"] = duration
+        events = _events.get()
+        if events is not None and len(events) < 500:
+            events.append({"name": name, "run_type": run_type, "duration_seconds": duration, "success": error_code is None, "error_code": error_code})
+        if name in {"chat.request", "audio.request"}:
+            logger.info("Backend operation %s duration_seconds=%.4f success=%s", name, duration, error_code is None)
         try:
             if run is not None:
                 run.end(outputs={}, error=error_code, metadata=metadata)
@@ -88,11 +111,11 @@ def operation(name, run_type="chain"):
 
 
 @contextmanager
-def observe_request(video_id):
+def observe_request(video_id, name="chat.request"):
     observer = Observer(video_id)
     token = _observer.set(observer)
     try:
-        with operation("chat.request"):
+        with operation(name):
             yield
     finally:
         try:

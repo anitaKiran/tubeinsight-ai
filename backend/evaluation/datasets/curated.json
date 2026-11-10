@@ -1,0 +1,139 @@
+{
+  "name": "curated",
+  "revision": "unreviewed-template-v1",
+  "level": "real",
+  "description": "Unreviewed templates, not verified real-video ground truth. No scores may be claimed until manually curated.",
+  "cases": [
+    {
+      "id": "review-topic",
+      "category": "answerable",
+      "video_id": "dQw4w9WgXcQ",
+      "reviewed": false,
+      "review_note": "TEMPLATE ONLY: replace video/question/facts/ranges/tools, record transcript hash and review note, then set reviewed=true.",
+      "turns": [
+        {
+          "question": "Replace with a factual question from the selected cached transcript.",
+          "answerable": true,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "review-unsupported",
+      "category": "unsupported",
+      "video_id": "dQw4w9WgXcQ",
+      "reviewed": false,
+      "review_note": "TEMPLATE ONLY: replace video/question/facts/ranges/tools, record transcript hash and review note, then set reviewed=true.",
+      "turns": [
+        {
+          "question": "Verify an absent fact against the entire selected transcript before use.",
+          "answerable": false,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "review-time",
+      "category": "timestamp",
+      "video_id": "dQw4w9WgXcQ",
+      "reviewed": false,
+      "review_note": "TEMPLATE ONLY: replace video/question/facts/ranges/tools, record transcript hash and review note, then set reviewed=true.",
+      "turns": [
+        {
+          "question": "What is discussed at 02:30?",
+          "answerable": true,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "get_transcript_segment"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "review-summary",
+      "category": "summary",
+      "video_id": "dQw4w9WgXcQ",
+      "reviewed": false,
+      "review_note": "TEMPLATE ONLY: replace video/question/facts/ranges/tools, record transcript hash and review note, then set reviewed=true.",
+      "turns": [
+        {
+          "question": "Summarize the whole video.",
+          "answerable": true,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "summarize_video"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "review-memory",
+      "category": "memory",
+      "video_id": "dQw4w9WgXcQ",
+      "reviewed": false,
+      "review_note": "TEMPLATE ONLY: replace video/question/facts/ranges/tools, record transcript hash and review note, then set reviewed=true.",
+      "turns": [
+        {
+          "question": "What are the three main topics?",
+          "answerable": true,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "summarize_video"
+            ]
+          ],
+          "expected_range": null
+        },
+        {
+          "question": "Explain the second one in more detail.",
+          "answerable": true,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "review-tools",
+      "category": "tools",
+      "video_id": "dQw4w9WgXcQ",
+      "reviewed": false,
+      "review_note": "TEMPLATE ONLY: replace video/question/facts/ranges/tools, record transcript hash and review note, then set reviewed=true.",
+      "turns": [
+        {
+          "question": "Replace with a question requiring two tools.",
+          "answerable": true,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,389 @@
+{
+  "name": "offline",
+  "revision": "synthetic-v1",
+  "level": "synthetic",
+  "description": "Scripted service/tool regression on synthetic gardening captions. No live AI quality is measured.",
+  "videos": [
+    {
+      "video_id": "garden00001",
+      "url": "https://www.youtube.com/watch?v=garden00001",
+      "title": "Synthetic balcony gardening lesson (not a real video)",
+      "language": "en",
+      "transcript": [
+        {
+          "start_seconds": 0.0,
+          "end_seconds": 25.0,
+          "text": "Tomatoes need six hours of sunlight each day."
+        },
+        {
+          "start_seconds": 30.0,
+          "end_seconds": 55.0,
+          "text": "Basil grows in moist soil. Water basil every morning."
+        },
+        {
+          "start_seconds": 150.0,
+          "end_seconds": 175.0,
+          "text": "Compost adds nutrients. Mix compost into the soil once a month."
+        }
+      ]
+    },
+    {
+      "video_id": "space000001",
+      "url": "https://www.youtube.com/watch?v=space000001",
+      "title": "Independent synthetic astronomy video",
+      "language": "en",
+      "transcript": [
+        {
+          "start_seconds": 0.0,
+          "end_seconds": 10.0,
+          "text": "Saturn has visible rings."
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "tomato-fact",
+      "category": "answerable",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "How much sunlight do tomatoes need?",
+          "answerable": true,
+          "expected_facts": [
+            "six hours"
+          ],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "address-unknown",
+      "category": "unsupported",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "What is the speaker's home address?",
+          "answerable": false,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "weather-unknown",
+      "category": "unsupported",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "What is the weather outside?",
+          "answerable": false,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "future-unknown",
+      "category": "unsupported",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "What happened five years later?",
+          "answerable": false,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "at-0230",
+      "category": "timestamp",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "What is discussed at 02:30?",
+          "answerable": true,
+          "expected_facts": [
+            "Compost"
+          ],
+          "acceptable_tools": [
+            [
+              "get_transcript_segment"
+            ]
+          ],
+          "expected_range": [
+            135,
+            165
+          ]
+        }
+      ]
+    },
+    {
+      "id": "range-0030",
+      "category": "timestamp",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "Explain 00:30 to 00:55.",
+          "answerable": true,
+          "expected_facts": [
+            "Basil",
+            "every morning"
+          ],
+          "acceptable_tools": [
+            [
+              "get_transcript_segment"
+            ]
+          ],
+          "expected_range": [
+            30,
+            55
+          ]
+        }
+      ]
+    },
+    {
+      "id": "outside-video",
+      "category": "timestamp",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "What is discussed at 50:00?",
+          "answerable": false,
+          "expected_facts": [],
+          "acceptable_tools": [
+            [
+              "get_transcript_segment"
+            ]
+          ],
+          "expected_range": [
+            2985,
+            3015
+          ]
+        }
+      ]
+    },
+    {
+      "id": "whole-summary",
+      "category": "summary",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "Summarize the whole video.",
+          "answerable": true,
+          "expected_facts": [
+            "Tomatoes",
+            "Basil",
+            "Compost"
+          ],
+          "acceptable_tools": [
+            [
+              "summarize_video"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "interval-summary",
+      "category": "summary",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "Summarize 00:30 to 00:55.",
+          "answerable": true,
+          "expected_facts": [
+            "Basil"
+          ],
+          "acceptable_tools": [
+            [
+              "summarize_video"
+            ]
+          ],
+          "expected_range": [
+            30,
+            55
+          ]
+        }
+      ]
+    },
+    {
+      "id": "follow-up-second",
+      "category": "memory",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "What are the three topics?",
+          "answerable": true,
+          "expected_facts": [
+            "Tomatoes",
+            "Basil",
+            "Compost"
+          ],
+          "acceptable_tools": [
+            [
+              "summarize_video"
+            ]
+          ],
+          "expected_range": null
+        },
+        {
+          "question": "Explain the second one in more detail.",
+          "answerable": true,
+          "expected_facts": [
+            "Basil",
+            "every morning"
+          ],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "topic-tool",
+      "category": "tools",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "Explain compost.",
+          "answerable": true,
+          "expected_facts": [
+            "nutrients"
+          ],
+          "acceptable_tools": [
+            [
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "combined-tools",
+      "category": "tools",
+      "video_id": "garden00001",
+      "reviewed": true,
+      "review_note": "Synthetic fixture facts and timestamp ranges explicitly authored together; scripted routing only, not real model ground truth.",
+      "turns": [
+        {
+          "question": "Explain 02:30 and also search basil.",
+          "answerable": true,
+          "expected_facts": [
+            "Compost",
+            "Basil"
+          ],
+          "acceptable_tools": [
+            [
+              "get_transcript_segment",
+              "search_transcript"
+            ]
+          ],
+          "expected_range": null
+        }
+      ]
+    },
+    {
+      "id": "clear-speech",
+      "category": "audio",
+      "reviewed": true,
+      "review_note": "Known local speech synthesis text, or deterministic invalid/silent fixture. Offline output is mocked; recognition quality is untested.",
+      "audio_fixture": "clear-question.wav",
+      "reference_text": "What are the main topics in this video?",
+      "expected_error": null
+    },
+    {
+      "id": "quiet-noise",
+      "category": "audio",
+      "reviewed": true,
+      "review_note": "Known local speech synthesis text, or deterministic invalid/silent fixture. Offline output is mocked; recognition quality is untested.",
+      "audio_fixture": "noisy-question.wav",
+      "reference_text": "What are the main topics in this video?",
+      "expected_error": null
+    },
+    {
+      "id": "silent",
+      "category": "audio",
+      "reviewed": true,
+      "review_note": "Known local speech synthesis text, or deterministic invalid/silent fixture. Offline output is mocked; recognition quality is untested.",
+      "audio_fixture": "silent.wav",
+      "reference_text": null,
+      "expected_error": "AUDIO_NO_SPEECH"
+    },
+    {
+      "id": "empty",
+      "category": "audio",
+      "reviewed": true,
+      "review_note": "Known local speech synthesis text, or deterministic invalid/silent fixture. Offline output is mocked; recognition quality is untested.",
+      "audio_fixture": "empty.wav",
+      "reference_text": null,
+      "expected_error": "AUDIO_EMPTY"
+    },
+    {
+      "id": "unsupported",
+      "category": "audio",
+      "reviewed": true,
+      "review_note": "Known local speech synthesis text, or deterministic invalid/silent fixture. Offline output is mocked; recognition quality is untested.",
+      "audio_fixture": "unsupported.txt",
+      "reference_text": null,
+      "expected_error": "AUDIO_UNSUPPORTED_FORMAT"
+    },
+    {
+      "id": "invalid",
+      "category": "audio",
+      "reviewed": true,
+      "review_note": "Known local speech synthesis text, or deterministic invalid/silent fixture. Offline output is mocked; recognition quality is untested.",
+      "audio_fixture": "invalid.webm",
+      "reference_text": null,
+      "expected_error": "AUDIO_INVALID"
+    }
+  ]
+}
