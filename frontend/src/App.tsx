@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import AudioRecorder from "./components/AudioRecorder";
 import {
   ApiError,
   askQuestion,
@@ -54,6 +55,8 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<"chat" | "transcript">("chat");
 
+  const [recordingSession, setRecordingSession] = useState(0);
+
   useEffect(() => {
     const controller = new AbortController();
 
@@ -86,20 +89,20 @@ function App() {
   }, [messages]);
 
   function playAtTimestamp(seconds: number) {
-  if (!video || !playerRef.current || !Number.isFinite(seconds)) {
-    return;
+    if (!video || !playerRef.current || !Number.isFinite(seconds)) {
+      return;
+    }
+
+    const start = Math.max(0, Math.floor(seconds));
+
+    playerRef.current.src =
+      `https://www.youtube.com/embed/${video.id}?start=${start}&autoplay=1`;
+
+    playerRef.current.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
   }
-
-  const start = Math.max(0, Math.floor(seconds));
-
-  playerRef.current.src =
-    `https://www.youtube.com/embed/${video.id}?start=${start}&autoplay=1`;
-
-  playerRef.current.scrollIntoView({
-    behavior: "smooth",
-    block: "center",
-  });
-}
 
   function resetChat() {
     chatRequestRef.current?.abort();
@@ -112,6 +115,7 @@ function App() {
     setChatError("");
     setIsChatLoading(false);
     setActiveTab("chat");
+    setRecordingSession((current) => current + 1);
   }
 
   async function handleLoadVideo(event: FormEvent<HTMLFormElement>) {
@@ -353,14 +357,14 @@ function App() {
                 disabled={isVideoLoading}
                 aria-busy={isVideoLoading}
               >
-              {isVideoLoading ? (
-                <>
-                <span className="button-spinner" aria-hidden="true" />
-                Analysing video…
-                </>
-              ) : (
-                "Analyse video"
-              )}
+                {isVideoLoading ? (
+                  <>
+                    <span className="button-spinner" aria-hidden="true" />
+                    Analysing video…
+                  </>
+                ) : (
+                  "Analyse video"
+                )}
               </button>
             </div>
 
@@ -409,7 +413,7 @@ function App() {
                 )}
 
                 <div className="video-player-container">
-                 <iframe
+                  <iframe
                     ref={playerRef}
                     key={video.id}
                     className="video-player"
@@ -463,28 +467,28 @@ function App() {
               <h2 id="chat-heading">Ask tubeInsight</h2>
               <span className="chat-label">Video Q&amp;A</span>
             </div>
-          
-          <div className="workspace-tabs" aria-label="Video views">
-            <button
-            type="button"
-            className={`workspace-tab ${activeTab === "chat" ? "is-active" : ""}`}
-            aria-pressed={activeTab === "chat"}
-            aria-controls="chat-view"
-            onClick={() => setActiveTab("chat")}
-          >
-            Chat
-           </button>
-           
-           <button
-              type="button"
-              className={`workspace-tab ${activeTab === "transcript" ? "is-active" : ""}`}
-              aria-pressed={activeTab === "transcript"}
-              aria-controls="transcript-view"
-              onClick={() => setActiveTab("transcript")}
-            >
-            Transcript
-          </button>
-        </div>
+
+            <div className="workspace-tabs" aria-label="Video views">
+              <button
+                type="button"
+                className={`workspace-tab ${activeTab === "chat" ? "is-active" : ""}`}
+                aria-pressed={activeTab === "chat"}
+                aria-controls="chat-view"
+                onClick={() => setActiveTab("chat")}
+              >
+                Chat
+              </button>
+
+              <button
+                type="button"
+                className={`workspace-tab ${activeTab === "transcript" ? "is-active" : ""}`}
+                aria-pressed={activeTab === "transcript"}
+                aria-controls="transcript-view"
+                onClick={() => setActiveTab("transcript")}
+              >
+                Transcript
+              </button>
+            </div>
 
             {isMock && (
               <p className="mock-notice" role="note">
@@ -493,138 +497,113 @@ function App() {
               </p>
             )}
 
-          <div
+            <div
               id="chat-view"
               className="chat-view"
               hidden={activeTab !== "chat"}
             >
-            <div
-              className="messages"
-              role="log"
-              aria-label="Conversation"
-              aria-live="polite"
-            >
-              {messages.length === 0 ? (
-                <div className="chat-empty-state">
-                  <span className="chat-symbol" aria-hidden="true">✦</span>
-                  <h3>Make the video make sense</h3>
-                  <p>
-                    {video
-                      ? "Ask a question about the selected video."
-                      : "Process a video to start asking questions."}
-                  </p>
-                </div>
-              ) : (
-                messages.map((message) => (
-                  <article
-                    key={message.id}
-                    className={`message message-${message.role}`}
-                  >
-                    <span className="message-author">
-                      {message.role === "user"
-                        ? "You"
-                        : message.mode === "mock"
-                          ? "tubeInsight AI · Simulated"
-                          : "tubeInsight AI"}
-                    </span>
+              <div
+                className="messages"
+                role="log"
+                aria-label="Conversation"
+                aria-live="polite"
+              >
+                {messages.length === 0 ? (
+                  <div className="chat-empty-state">
+                    <span className="chat-symbol" aria-hidden="true">✦</span>
+                    <h3>Make the video make sense</h3>
+                    <p>
+                      {video
+                        ? "Ask a question about the selected video."
+                        : "Process a video to start asking questions."}
+                    </p>
+                  </div>
+                ) : (
+                  messages.map((message) => (
+                    <article
+                      key={message.id}
+                      className={`message message-${message.role}`}
+                    >
+                      <span className="message-author">
+                        {message.role === "user"
+                          ? "You"
+                          : message.mode === "mock"
+                            ? "tubeInsight AI · Simulated"
+                            : "tubeInsight AI"}
+                      </span>
 
-                    <p>{message.text}</p>
+                      <p>{message.text}</p>
 
-                    {video &&
-                      message.sources &&
-                      message.sources.length > 0 && (
-                        <div className="answer-sources">
-                          <span className="sources-label">
-                            {message.mode === "mock"
-                              ? "Simulated sources"
-                              : "Sources"}
-                          </span>
+                      {video &&
+                        message.sources &&
+                        message.sources.length > 0 && (
+                          <div className="answer-sources">
+                            <span className="sources-label">
+                              {message.mode === "mock"
+                                ? "Simulated sources"
+                                : "Sources"}
+                            </span>
 
-                          {message.sources.map((source, index) => (
-                            <a
-                              className="source-card"
-                              onClick={(event) => {
-                              if (
-                                  event.ctrlKey ||
-                                  event.metaKey ||
-                                  event.shiftKey ||
-                                  event.altKey
-                                ) {
-                                  return;
-                              }
-                            event.preventDefault();
-                            playAtTimestamp(source.start_seconds);
-                          }}
-                              key={`${source.start_seconds}-${index}`}
-                              href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(source.start_seconds)}s`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              <span className="source-timestamp">
-                                ▶ {formatTimestamp(source.start_seconds)}
-                              </span>
-                              <span>{source.text}</span>
-                            </a>
-                          ))}
-                        </div>
-                      )}
-                  </article>
-                ))
-              )}
+                            {message.sources.map((source, index) => (
+                              <a
+                                className="source-card"
+                                onClick={(event) => {
+                                  if (
+                                    event.ctrlKey ||
+                                    event.metaKey ||
+                                    event.shiftKey ||
+                                    event.altKey
+                                  ) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  playAtTimestamp(source.start_seconds);
+                                }}
+                                key={`${source.start_seconds}-${index}`}
+                                href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(source.start_seconds)}s`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <span className="source-timestamp">
+                                  ▶ {formatTimestamp(source.start_seconds)}
+                                </span>
+                                <span>{source.text}</span>
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                    </article>
+                  ))
+                )}
 
-              <div ref={messagesEndRef} />
-            </div>
+                <div ref={messagesEndRef} />
+              </div>
 
-            {isChatLoading && (
-               <div className="chat-loading" role="status" aria-live="polite">
+              {isChatLoading && (
+                <div className="chat-loading" role="status" aria-live="polite">
                   <span className="chat-loading-spinner" aria-hidden="true" />
                   <div>
                     <p className="chat-loading-title">Preparing your answer…</p>
                     <p className="chat-loading-description">
                       This may take a few moments.
                     </p>
-                    </div>
                   </div>
-            )}
+                </div>
+              )}
 
-            <form
-              className="question-form"
-              onSubmit={handleSendQuestion}
-            >
-              <label className="sr-only" htmlFor="question">
-                Your question
-              </label>
-
-              <input
-                id="question"
-                type="text"
-                placeholder={
-                  video ? "Ask about this video..." : "Process a video first"
-                }
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
+              <AudioRecorder
+                key={`${recordingSession}-${video?.id ?? "none"}-${isChatLoading}-${isVideoLoading}`}
+                question={question}
+                onQuestionChange={setQuestion}
+                onSubmit={handleSendQuestion}
                 disabled={!video || isVideoLoading || isChatLoading}
-                aria-describedby={chatError ? "chat-error" : undefined}
-                maxLength={2000}
+                sending={isChatLoading}
+                errorId={chatError ? "chat-error" : undefined}
               />
 
-              <button
-                className="primary-button"
-                type="submit"
-                disabled={
-                  !video ||
-                  isVideoLoading ||
-                  isChatLoading ||
-                  !question.trim()
-                }
-              >
-                {isChatLoading ? "Sending..." : "Send"}
-              </button>
-            </form>
-
-            <p className="chat-disclaimer">
-              Check the sources when reviewing an answer.
-            </p>
+              <p className="chat-disclaimer">
+                Check the sources when reviewing an answer.
+              </p>
             </div>
 
             <div
@@ -632,61 +611,61 @@ function App() {
               className="transcript-view"
               hidden={activeTab !== "transcript"}
             >
-            {!video || !processedVideo ? (
-              <div className="chat-empty-state">
-                <h3>No transcript yet</h3>
-                <p>Analyse a video to view its transcript.</p>
-              </div>
-  ) : processedVideo.transcript.length === 0 ? (
-    <div className="chat-empty-state">
-      <h3>Transcript unavailable</h3>
-      <p>No transcript segments were returned for this video.</p>
-    </div>
-  ) : (
-    <>
-      <p className="helper-text">
-        {processedVideo.transcript.length} transcript segments.
-        Select a timestamp to play that moment in the video above.
-      </p>
+              {!video || !processedVideo ? (
+                <div className="chat-empty-state">
+                  <h3>No transcript yet</h3>
+                  <p>Analyse a video to view its transcript.</p>
+                </div>
+              ) : processedVideo.transcript.length === 0 ? (
+                <div className="chat-empty-state">
+                  <h3>Transcript unavailable</h3>
+                  <p>No transcript segments were returned for this video.</p>
+                </div>
+              ) : (
+                <>
+                  <p className="helper-text">
+                    {processedVideo.transcript.length} transcript segments.
+                    Select a timestamp to play that moment in the video above.
+                  </p>
 
-      <div className="transcript-list">
-        {processedVideo.transcript.map((segment, index) => (
-          <div
-            className="transcript-segment"
-            key={`${segment.start_seconds}-${index}`}
-          >
-            <a
-               onClick={(event) => {
-                if (
-                  event.ctrlKey ||
-                  event.metaKey ||
-                  event.shiftKey ||
-                  event.altKey
-                ) {
-                  return;
-                }
-                event.preventDefault();
-                playAtTimestamp(segment.start_seconds);
-              }}
-              href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(
-                segment.start_seconds,
-              )}s`}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Open video at ${formatTimestamp(
-                segment.start_seconds,
-              )}${isMock ? "; simulated timestamp" : ""}`}
-            >
-              {formatTimestamp(segment.start_seconds)}
-            </a>
+                  <div className="transcript-list">
+                    {processedVideo.transcript.map((segment, index) => (
+                      <div
+                        className="transcript-segment"
+                        key={`${segment.start_seconds}-${index}`}
+                      >
+                        <a
+                          onClick={(event) => {
+                            if (
+                              event.ctrlKey ||
+                              event.metaKey ||
+                              event.shiftKey ||
+                              event.altKey
+                            ) {
+                              return;
+                            }
+                            event.preventDefault();
+                            playAtTimestamp(segment.start_seconds);
+                          }}
+                          href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(
+                            segment.start_seconds,
+                          )}s`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`Open video at ${formatTimestamp(
+                            segment.start_seconds,
+                          )}${isMock ? "; simulated timestamp" : ""}`}
+                        >
+                          {formatTimestamp(segment.start_seconds)}
+                        </a>
 
-            <p>{segment.text}</p>
-          </div>
-        ))}
-      </div>
-    </>
-  )}
-</div>
+                        <p>{segment.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
 
 
           </section>
