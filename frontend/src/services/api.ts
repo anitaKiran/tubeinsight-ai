@@ -52,3 +52,25 @@ export function askQuestion(
     90_000,
   );
 }
+
+export type TranscriptionResponse = {
+  text: string;
+  language?: string | null;
+  model: string;
+};
+
+export function transcribeAudio(audio: Blob, signal?: AbortSignal) {
+  const mime = audio.type.split(";")[0].toLowerCase();
+  const extensions: Record<string, string> = {
+    "audio/webm": "webm", "audio/mp4": "mp4", "audio/ogg": "ogg",
+    "audio/wav": "wav", "audio/mpeg": "mp3",
+  };
+  const extension = extensions[mime];
+  if (!extension) throw new Error("This recording format is unsupported. Try Chrome or Edge.");
+  const form = new FormData();
+  form.append("file", audio, `question.${extension}`);
+  // Let the browser set the multipart boundary.
+  return request<TranscriptionResponse>("/api/audio/transcribe", {
+    method: "POST", body: form, signal,
+  }, 90_000);
+}
