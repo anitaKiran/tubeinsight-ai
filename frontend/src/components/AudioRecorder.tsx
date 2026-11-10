@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { transcribeAudio } from "../services/api";
+
 import type { FormEvent } from "react";
 
 type AudioRecorderProps = {
@@ -22,13 +24,17 @@ function Icon({ kind }: { kind: "mic" | "send" | "close" | "stop" }) {
   );
 }
 
-type RecordingStatus = "idle" | "requesting" | "recording" | "stopping";
+type RecordingStatus = "idle" | "requesting" | "recording" | "stopping" | "transcribing";
 
 function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending, errorId }: AudioRecorderProps) {
   const [status, setStatus] = useState<RecordingStatus>("idle");
   const [audioUrl, setAudioUrl] = useState("");
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState("");
+
+  const [transcribed, setTranscribed] = useState(false);
+  const audioBlobRef = useRef<Blob | null>(null);
+  const transcriptionRef = useRef<AbortController | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -60,12 +66,14 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
       audioUrlRef.current = "";
     }
 
+    audioBlobRef.current = null;
     setAudioUrl("");
     setSeconds(0);
   }
 
   useEffect(() => {
     return () => {
+      transcriptionRef.current?.abort();
       requestIdRef.current += 1;
 
       const recorder = recorderRef.current;
@@ -89,6 +97,35 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
     };
   }, []);
 
+  async function transcribeRecording(audio: Blob) {
+    if (busyRef.current || disabled) return;
+    busyRef.current = true;
+    const controller = new AbortController();
+    transcriptionRef.current = controller;
+    const requestId = ++requestIdRef.current;
+    setStatus("transcribing");
+    setError("");
+    try {
+      const result = await transcribeAudio(audio, controller.signal);
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return;
+      const text = result.text.trim();
+      if (!text) throw new Error("No speech was detected. Please try recording again.");
+      if (text.length > 2000) throw new Error("This transcription is too long. Please record a shorter question.");
+      onQuestionChange(text);
+      setTranscribed(true);
+      clearPreview();
+    } catch (requestError) {
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return;
+      setError(requestError instanceof Error ? requestError.message : "Unable to transcribe. Please try again.");
+    } finally {
+      if (requestId === requestIdRef.current) {
+        transcriptionRef.current = null;
+        busyRef.current = false;
+        setStatus("idle");
+      }
+    }
+  }
+
   async function startRecording() {
     if (busyRef.current || disabled) return;
 
@@ -101,6 +138,7 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
 
     busyRef.current = true;
     const requestId = ++requestIdRef.current;
+    setTranscribed(false);
     discardRef.current = false;
     clearPreview();
     setStatus("requesting");
@@ -167,9 +205,11 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
           return;
         }
 
+        audioBlobRef.current = audio;
         const url = URL.createObjectURL(audio);
         audioUrlRef.current = url;
         setAudioUrl(url);
+        void transcribeRecording(audio);
       };
 
       recorder.start();
@@ -217,6 +257,8 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
   }
 
   function cancelRecording() {
+    transcriptionRef.current?.abort();
+    transcriptionRef.current = null;
     requestIdRef.current += 1;
     discardRef.current = true;
 
@@ -251,7 +293,13 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
           onSubmit(event);
         }}
       >
-        {active ? (
+        {status === "transcribing" ? (
+          <>
+            <span className="button-spinner" aria-hidden="true" />
+            <span className="transcription-label">Transcribing your question…</span>
+            <button className="composer-icon" type="button" onClick={cancelRecording} aria-label="Cancel transcription"><Icon kind="close" /></button>
+          </>
+        ) : active ? (
           <>
             <button className="composer-icon" type="button" onClick={cancelRecording}
               disabled={status === "stopping"} aria-label="Cancel recording" title="Cancel recording">
@@ -275,7 +323,7 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
           <>
             <label className="sr-only" htmlFor="question">Your question</label>
             <input id="question" type="text" placeholder={disabled ? "Chat is currently unavailable" : "Ask about this video…"}
-              value={question} onChange={(event) => onQuestionChange(event.target.value)}
+              value={question} onChange={(event) => { setTranscribed(false); onQuestionChange(event.target.value); }}
               disabled={disabled} aria-describedby={errorId} maxLength={2000} />
             <button className="composer-icon" type="button" onClick={startRecording} disabled={disabled}
               aria-label={audioUrl ? "Record question again" : "Record a question"} title="Record a question">
@@ -290,20 +338,23 @@ function AudioRecorder({ question, onQuestionChange, onSubmit, disabled, sending
       </form>
 
       <p className="voice-composer-hint" role="status">
-        {status === "requesting" ? "Allow microphone access to start recording." :
+        {status === "transcribing" ? "Converting your recording to text…" :
+          status === "requesting" ? "Allow microphone access to start recording." :
           status === "recording" ? "Recording… stop when you’re done. Maximum 60 seconds." :
           status === "stopping" ? "Finishing your recording…" :
+          transcribed ? "Transcribed from voice. Review your question, then send." :
           sending ? "Preparing your answer…" : "Type a question or tap the microphone to record."}
       </p>
 
-      {audioUrl && (
+      {audioUrl && status === "idle" && (
         <div className="recording-review">
           <div className="recording-review-heading">
             <span className="recording-ready-badge">Recording ready</span>
             <button className="recording-discard" type="button" onClick={clearPreview}>Discard</button>
           </div>
           <audio controls src={audioUrl} aria-label="Recorded question preview" />
-          <p>Listen to your recording. Speech-to-text will be available once connected.</p>
+          <button className="recording-retry" type="button" disabled={disabled} onClick={() => { if (audioBlobRef.current) void transcribeRecording(audioBlobRef.current); }}>Retry transcription</button>
+          <p>Listen to your recording, then retry or record again.</p>
         </div>
       )}
       {error && <p className="recording-error" role="alert">{error}</p>}

@@ -822,3 +822,7 @@ input::placeholder {
 .recording-review p { margin: 8px 0 0; color: #71717a; font-size: 12px; }
 .recording-error { margin: 10px 8px 0; color: #b91c1c; font-size: 13px; }
 @media (prefers-reduced-motion: reduce) { .recording-bars span { animation: none; } .voice-composer-bar { transition: none; } }
+
+.transcription-label { flex: 1; color: #52525b; font-size: 14px; }
+.voice-composer-bar > .button-spinner { margin-left: 14px; flex-shrink: 0; }
+.recording-retry { padding: 8px 12px; border: 1px solid #d4d4d8; border-radius: 8px; background: #fff; color: #27272a; cursor: pointer; }
