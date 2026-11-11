@@ -10,20 +10,25 @@ The application combines a React frontend, a FastAPI backend, retrieval-augmente
 
 ## 🏗️ Project Architecture
 
-```mermaid
-flowchart TD
-    A[YouTube URL] --> B[FastAPI: retrieve or load transcript]
-    B <--> C[(Supabase transcript cache)]
-    B --> D[Timestamped chunks and OpenAI embeddings]
-    D --> E[(Pinecone vector index)]
-    F[React: text or voice question] --> G[FastAPI and LangGraph agent]
-    G <--> H[Transcript search, timestamp retrieval, summary tools]
-    H --> E
-    H --> B
-    G <--> I[(Supabase conversation memory)]
-    G --> J[OpenAI answer with timestamped sources]
-    J --> F
-    G -. Run tracing .-> K[LangSmith]
+```text
+
+┌───────────────────── React + Vite Frontend ─────────────────────┐
+│    Chat tab · Transcript tab · Video player · Audio recorder    │
+└────────────────────────────────┬────────────────────────────────┘
+                                 │  REST
+┌────────────────────────────────▼────────────────────────────────┐
+│                         FastAPI Backend                         │
+│          Video processing · Chat · Audio transcription          │
+└──────────┬─────────────────────┬─────────────────────┬──────────┘
+           │                     │                     │
+           ▼                     ▼                     ▼
+       Supabase              Pinecone         OpenAI + LangGraph
+    cache + memory         vector search       LLM · embeddings
+                                                       │
+                                                       ▼
+                                                   LangSmith
+                                                    tracing
+                                                
 ```
 
 Voice recordings are sent to the transcription endpoint first. The returned text appears in the question box for review before the user submits it to the chat.
@@ -192,8 +197,7 @@ npm run lint
 
 ## Project Structure
 
-Key project paths:
-
+```text
 tubeinsight-ai/
 │
 ├── frontend/
@@ -220,6 +224,7 @@ tubeinsight-ai/
 │   └── api-types.ts
 │
 └── README.md
+```
 
 ## 🛠️ Technologies Used
 
