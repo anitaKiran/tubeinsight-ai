@@ -5,6 +5,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictStr
 
 from app.agent.observability import operation
+from app.agent.context import resolve_search_query
 from app.agent.timestamps import seconds, select_range
 from app.rag.answering import retrieve_evidence
 from app.schemas.error import ApiException
@@ -30,11 +31,12 @@ class SummaryArgs(BaseModel):
     end_seconds: Timestamp | None = None
 
 
-def make_tools(video, ledger, settings, rag_settings, budget, model):
+def make_tools(video, ledger, settings, rag_settings, budget, model, *, history=()):
     def search_transcript(query):
         """Search the selected video's transcript for a topic or resolved follow-up question. Returns original evidence and timestamps."""
         with operation("tool.search_transcript", "tool"):
             budget.remaining()
+            query = resolve_search_query(query, history)
             with operation("pinecone.retrieval", "retriever"):
                 documents = retrieve_evidence(video, query)
             rows = [ledger.add(doc.page_content, doc.metadata["start_seconds"], doc.metadata["end_seconds"],

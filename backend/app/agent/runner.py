@@ -37,7 +37,7 @@ def run_agent(video, question, history, settings, budget):
         messages.append(cls(content=redact(row["content"])))
     messages.append(HumanMessage(content=question))
     with operation("agent.execution"), open_agent_model(rag_settings, budget) as model:
-        tools = make_tools(video, ledger, settings, rag_settings, budget, model)
+        tools = make_tools(video, ledger, settings, rag_settings, budget, model, history=history)
         registry = {tool.name: tool for tool in tools}
         selection = model.invoke(messages, tools=tools, name="agent.tool_selection")
         calls = getattr(selection, "tool_calls", None) or []
@@ -48,13 +48,21 @@ def run_agent(video, question, history, settings, budget):
         messages.append(selection)
         has_evidence = False
         allowed_ids = set()
+        executed = {}
         for call in calls:
-            budget.tool()
             tool = registry.get(call.get("name"))
             if tool is None:
                 raise ApiException(502, "AGENT_TOOL_ERROR", "The model selected an unsupported tool.")
             try:
-                result = tool.invoke(call.get("args", {}))
+                # Validate and normalize once before caching: 150 and "02:30"
+                # refer to the same call. Still reply to every native call ID.
+                arguments = tool.args_schema.model_validate(call.get("args", {})).model_dump(mode="json")
+                key = (tool.name, json.dumps(arguments, sort_keys=True, ensure_ascii=False))
+                budget.remaining()
+                if key not in executed:
+                    budget.tool()
+                    executed[key] = tool.invoke(arguments)
+                result = executed[key]
             except ValidationError:
                 raise ApiException(422, "INVALID_TOOL_ARGUMENTS", "The requested transcript tool arguments are invalid.") from None
             except ApiException:

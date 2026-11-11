@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from app.evaluation.scoring import latency_summary
+from app import __version__
 
 
 def aggregate(results):
@@ -47,7 +48,7 @@ def aggregate(results):
 
 def write_reports(dataset, mode, results, output_dir, models, *, model_calls=0):
     now = datetime.now(timezone.utc)
-    report = {"created_at": now.isoformat(), "backend_version": "0.6.0", "dataset": dataset.name, "revision": dataset.revision,
+    report = {"created_at": now.isoformat(), "backend_version": __version__, "dataset": dataset.name, "revision": dataset.revision,
         "level": dataset.level, "mode": mode, "models": models, "model_calls": model_calls, "case_count": len(results),
         "measurement_scope": "Scripted provider regression; does not measure real model quality or provider latency." if mode == "offline" else "Limited live evaluation; semantic results require reviewed references and human or judge review.",
         "limitations": ["Mechanical checks cannot establish factual correctness or semantic evidence support.",
@@ -61,7 +62,7 @@ def write_reports(dataset, mode, results, output_dir, models, *, model_calls=0):
     stem = f"{dataset.name}-{mode}-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
     json_path, md_path, csv_path = [output/f"{stem}.{ext}" for ext in ("json", "md", "csv")]
     json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    rows = ["# tubeInsight-ai evaluation", "", f"Date: {report['created_at']}", f"Backend: 0.6.0 · Dataset: {dataset.name} / {dataset.revision} · Mode: {mode}",
+    rows = ["# tubeInsight-ai evaluation", "", f"Date: {report['created_at']}", f"Backend: {__version__} · Dataset: {dataset.name} / {dataset.revision} · Mode: {mode}",
         "", report["measurement_scope"], "", f"Cases: {len(results)} · " + " · ".join(f"{k}: {v}" for k,v in report["summary"]["counts"].items()),
         "", "A passed case means applicable deterministic checks passed. Semantic correctness and ASR accuracy remain untested unless explicitly judged/measured.",
         "", "| Case | Category | Status | Seconds |", "|---|---|---|---:|"]

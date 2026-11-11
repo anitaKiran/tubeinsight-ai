@@ -1,866 +1,341 @@
-# tubeInsight-ai — Transcript caching and real video RAG
+# tubeInsight-ai backend
 
-## Day 4 — Audio questions and evaluation (API 0.6.0)
+Rayhan builds the Python/FastAPI backend; Anita Kiran owns React. This README
+reproduces backend **0.6.1**. No frontend changes are needed for stabilization.
+The API serves original YouTube transcripts, video-bound tools and persistent
+chat, plus a backend-only recorded-question transcription endpoint.
 
-Backend-only addition. Existing video/chat schemas, transcript caching, tools,
-Supabase memory, and the user-selected Pinecone Llama index remain compatible.
-No migration is needed. Only `python-multipart==0.0.33` is added; install backend
-requirements in the existing venv. No frontend files or documentation change.
+## Actual stack and architecture
 
-### Audio endpoint and Postman
+Python 3.11+ (verified on 3.12), FastAPI/Pydantic, youtube-transcript-api, official
+Supabase SDK/PostgreSQL, Pinecone, LangChain native StructuredTools/ChatOpenAI,
+OpenAI chat/transcription, optional LangSmith and pytest. LangGraph is not used.
+The existing `tubechunks` document index uses **Pinecone-hosted
+llama-text-embed-v2, 1024 dimensions, cosine, chunk_text**. OpenAI handles chat and
+speech; it does not supply embeddings for this user-selected index.
 
-`POST http://localhost:8000/api/audio/transcribe` takes multipart/form-data with
-one required **file** field (`UploadFile`). In Postman choose Body → form-data →
-key `file` → change Text to File → select a short recording. Let Postman set
-Content-Type and the multipart boundary. Swagger `/docs` also has a file picker.
+[Architecture and Mermaid flow](../docs/architecture.md) ·
+[Agent tools](../docs/agent-tools.md) · [Conversation memory](../docs/conversation-memory.md) ·
+[Evaluation evidence](../docs/evaluation-results.md) · [API contract](../docs/api-contract.md) ·
+[Day 5 audit and changes](../docs/day5-implementation.md).
 
-```json
-{"text":"What are the main topics in this video?","language":null,"model":"gpt-transcribe"}
+```text
+backend/
+  app/main.py              FastAPI, CORS and stable error mapping
+  app/routers/             health, videos, chat, audio
+  app/schemas/             existing public models and internal stored video
+  app/services/            transcript ingestion, processing, chat, audio
+  app/db/                  bounded official Supabase transport
+  app/repositories/        video, memory and summary persistence
+  app/rag/                 spans/chunks, versioned indexing, verified retrieval
+  app/agent/               native tools, context, budgets, summaries, evidence, traces
+  app/evaluation/          guarded offline/live CLI, scoring, reports, optional judge/export
+  app/scripts/             explicit local ingestion/index/summary CLIs
+  migrations/              001 videos; 002 memory and summaries
+  evaluation/              reviewed synthetic fixtures and unreviewed real templates
+  tests/                   no-cloud default regressions
+  reports/evaluation/      generated ignored JSON/Markdown/CSV
 ```
 
-Language is populated only for a single explicit detected provider language code.
-Speech stays in its original language. There is no translation or automatic chat
-request. Submit the returned text to the unchanged `/api/chat/ask` endpoint:
+## Local setup (PowerShell)
 
-```json
-{"video_id":"YOUR_CACHED_VIDEO_ID","question":"What are the main topics in this video?","conversation_id":null}
+From the repository root:
+
+```powershell
+Set-Location backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-PowerShell upload example (replace the recording path):
+Create/copy these only for a fresh setup; preserve an existing venv and private
+.env. Edit .env locally, never paste credentials into chat or commit them. If
+activation is restricted, invoke `.\.venv\Scripts\python.exe` directly.
+`load_dotenv` preserves inherited process variables, so restart the backend after
+key changes and remove stale shell overrides when appropriate.
+
+Apply all of migrations 001 then 002 in the matching Supabase project's SQL Editor
+as project owner. The backend service key performs data operations, not arbitrary
+schema administration. Existing projects with both migrations need **no Day 5
+migration**. No index is created/deleted automatically: use the existing compatible
+`tubechunks`. Install pinned dependencies without speculative provider upgrades.
+
+```powershell
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+[Swagger](http://localhost:8000/docs) · [OpenAPI](http://localhost:8000/openapi.json).
+The OpenAPI version should be 0.6.1. Health is connectivity-only and preserves its
+legacy service/mode strings; it is not a live database/model readiness test.
+
+## Backend environment
+
+The full commented template is [.env.example](.env.example). Keys stay server-side;
+never use VITE_ for these values.
+
+| Variable/group | Purpose/default |
+| --- | --- |
+| SUPABASE_URL, SUPABASE_SECRET_KEY | HTTPS project origin (no REST path) and current sb_secret_ backend key. |
+| APP_ENV, TRANSCRIPT_SOURCE | Local development/auto; production/supabase. Vercel indicators always force cache-only. |
+| CORS_ORIGINS | Exact comma-separated frontend origins; defaults localhost:5173/3000, never wildcard production. |
+| OPENAI_API_KEY, OPENAI_CHAT_MODEL | Chat/speech key; configured chat default gpt-6-luna. No automatic model substitution. |
+| PINECONE_API_KEY, PINECONE_INDEX_NAME | Existing compatible document index; tubechunks. |
+| PINECONE_EMBEDDING_MODEL/FIELD/DIMENSIONS | llama-text-embed-v2 / chunk_text / 1024. Must match index schema/cosine. |
+| OPENAI_TRANSCRIPTION_MODEL | gpt-transcribe. |
+| MAX_AUDIO_UPLOAD_MB, AUDIO_TIMEOUT_SECONDS | Decimal file MB, default 4 (0.01–4 allowed); provider timeout 20s (1–30), no retries. |
+| LANGSMITH_TRACING/KEY/PROJECT | Optional false/empty/tubeInsight-ai; safe content-free traces only. |
+| EVALUATION_ENABLE_LIVE | false; live CLI also requires --enable-live. Keep false on Vercel. |
+| EVALUATION_OUTPUT_DIR | reports/evaluation, ignored generated results. |
+
+Validated resource controls:
+
+| Controls | Defaults and meaning |
+| --- | --- |
+| SUPABASE_TIMEOUT_SECONDS | 10s, maximum 30; connect at most 3s, no SDK retries. |
+| YOUTUBE_CAPTION_LANGUAGES / FALLBACK | en / true; original caption track priority and fallback, no translation. |
+| YOUTUBE_CONNECT/READ/REQUEST_BUDGET_SECONDS | 3 / 10 / 30; at most six sends/three redirects, no retries or environment proxies. |
+| RAG_CHUNK_SIZE / OVERLAP | 1000 / 180 characters; exact caption provenance. |
+| RAG_EMBED_BATCH_SIZE / MAX_CHUNKS | 32 / 2000; local indexing bounds. |
+| RAG_TOP_K / MIN_SCORE | 4 / 0.25; raw cosine retrieval gate, not calibrated semantic confidence. |
+| RAG_API_TIMEOUT_SECONDS / INDEX_TIMEOUT_SECONDS | 10 / 90; bounded provider sockets / local batch deadline. |
+| CHAT_HISTORY_MESSAGES / CHARS | 12 / 12000; bounded recent model context, not deletion of older rows. |
+| AGENT_MAX_TOOL_CALLS / MAX_MODEL_CALLS | 3 / 6; unique executions cached within a request; native selection count remains bounded. |
+| AGENT_REQUEST_BUDGET_SECONDS | 45; checked between bounded operations, not a hard process kill. |
+| TRANSCRIPT_MAX_WINDOW_SECONDS / POINT_WINDOW_SECONDS | 600 / 30; time-range limit / centered point lookup. |
+| TOOL_MAX_TEXT_CHARS | 14000 per tool result. |
+| SUMMARY_BATCH_CHARS / MAX_BATCHES | 8000 / 3; complete selected material or controlled SUMMARY_TOO_LONG. |
+
+See .env.example for exact full variable names. Existing provider/agent retries
+remain as implemented: the active Day 3+ agent has no model retries. The legacy
+Day 2 single-answer helper retains its older one-retry configuration and is not
+the `/api/chat/ask` execution path.
+
+## API requests and responses
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | /api/health | Legacy connectivity envelope. |
+| POST | /api/videos/process | Validate URL, prepare/read original captions. |
+| POST | /api/chat/ask | Grounded tool-based answer with persistent session. |
+| POST | /api/audio/transcribe | Short multipart audio to original-language text. |
+
+All errors keep `{"error":{"code":"CODE","message":"Safe explanation"}}`.
+No public evaluation, conversation-history/list, refresh or transcript-write route
+exists. Missing/invalid request fields return 422 without echoing raw input.
+
+Video request:
+
+```json
+{"url":"https://www.youtube.com/watch?v=VIDEO_ID_11"}
+```
+
+Response shape (illustrative placeholders, not a measured transcript):
+
+```json
+{"status":"ready","mode":"real","video":{"id":"VIDEO_ID_11","title":null,"url":"https://www.youtube.com/watch?v=VIDEO_ID_11","thumbnail_url":"https://img.youtube.com/vi/VIDEO_ID_11/hqdefault.jpg","duration_seconds":null},"transcript":[{"start_seconds":0.0,"end_seconds":4.0,"text":"Actual caption returned by the provider."}]}
+```
+
+Chat request:
+
+```json
+{"video_id":"VIDEO_ID_11","question":"What are the three main topics?","conversation_id":null}
+```
+
+Response shape:
+
+```json
+{"video_id":"VIDEO_ID_11","conversation_id":"00000000-0000-4000-8000-000000000001","mode":"real","answer":"Answer grounded in selected video evidence.","sources":[{"start_seconds":30.0,"end_seconds":55.0,"text":"Actual supporting transcript excerpt."}]}
+```
+
+Replace placeholders with a real cached video and returned session UUID. A
+follow-up reuses that UUID: `Explain the second one.` New null-ID requests start
+independently. Unknown/cross-video IDs return 404; busy sessions return 409.
+Unresolved ordinal searches can return 422 FOLLOWUP_CONTEXT_REQUIRED asking the
+client to name the topic; no new frontend request/response fields are introduced.
+
+### Audio and Postman
+
+POST http://localhost:8000/api/audio/transcribe. Choose Body → form-data → key
+`file`, change Text to File, select a short recording. Let Postman set Content-Type
+with its boundary; do not manually select JSON. Swagger also has a file picker.
 
 ```powershell
 curl.exe -X POST http://localhost:8000/api/audio/transcribe -F "file=@C:/recordings/question.webm"
 ```
 
-Accepted formats: MP3, MP4, MPEG, MPGA, M4A, PCM WAV, WebM with Opus/Vorbis.
-The backend checks actual WAV structure or compressed-container signatures;
-filename and declared MIME alone are insufficient. Deep codec validation remains
-with OpenAI. PCM silence is rejected locally; compressed non-speech relies on the
-provider. Recognition can be wrong: review the transcribed question. No FFmpeg or
-local Whisper dependencies are added. No canned speech output is returned.
-
-Default file cap: **4,000,000 bytes (4 decimal MB)**. The whole multipart body is
-bounded before parsing to file cap + 64,000 bytes, also for chunked requests.
-Upload reception has a 15-second deadline. OpenAI's timeout defaults to 20 seconds
-(1–30 allowed), max_retries=0. Socket timeouts are not hard process-kill deadlines.
-Buffers and temporary FastAPI multipart spools are closed/released on success or
-failure. Audio is not saved permanently or sent to Supabase, Pinecone or LangSmith.
-
-| HTTP | Audio codes |
-| --- | --- |
-| 400 | AUDIO_EMPTY, AUDIO_INVALID (malformed length) |
-| 408 | AUDIO_UPLOAD_TIMEOUT |
-| 413 | AUDIO_TOO_LARGE |
-| 415 | AUDIO_UNSUPPORTED_FORMAT |
-| 422 | VALIDATION_ERROR (missing file), AUDIO_INVALID, AUDIO_NO_SPEECH |
-| 429 | AUDIO_RATE_LIMITED |
-| 500 | CONFIGURATION_ERROR (missing key/invalid limits) |
-| 502 | AUDIO_TRANSCRIPTION_FAILED |
-| 503 | AUDIO_UNAVAILABLE (connection/account/model access) |
-| 504 | AUDIO_TIMEOUT |
-
-All use `{"error":{"code":"...","message":"..."}}`. Provider error bodies,
-filenames, keys and audio contents are not logged or echoed in errors.
-
-### Environment and Vercel
-
-Keep existing variables and configure these backend-only defaults:
-
-```dotenv
-OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe
-MAX_AUDIO_UPLOAD_MB=4
-AUDIO_TIMEOUT_SECONDS=20
-EVALUATION_ENABLE_LIVE=false
-EVALUATION_OUTPUT_DIR=reports/evaluation
+```json
+{"text":"What are the main topics?","language":null,"model":"gpt-transcribe"}
 ```
 
-In Vercel → project → Settings → Environment Variables, set OPENAI_API_KEY
-privately and add the model, size and timeout values for the intended environments.
-Keep APP_ENV=production, TRANSCRIPT_SOURCE=supabase and EVALUATION_ENABLE_LIVE=false.
-Keep existing Supabase/Pinecone and optional LangSmith settings. After a later
-manual redeploy, verify `/openapi.json` version 0.6.0, upload in Postman against the
-deployed base URL, then pass the result to `/api/chat/ask` for an already cached,
-indexed video. This task does not deploy or add a microphone interface.
+Language is populated only for a reliable single provider language. This uses
+transcription, not translation; submit the returned text separately through chat.
+Anita's frontend microphone UI may still be pending and is not implemented here.
 
-[Vercel Functions limit request bodies to 4.5 MB](https://vercel.com/docs/functions/limitations).
-Platform rejection happens before this app and may use Vercel's own 413 envelope.
-OpenAI's larger upload allowance does not change the hosting limit. Longer audio
-needs a separate reviewed storage/upload workflow in a future task.
+MP3/MP4/MPEG/MPGA/M4A/PCM WAV/WebM Opus/Vorbis receive practical content checks,
+not merely filename/MIME checks; OpenAI performs deep decoding. PCM silence is
+rejected locally, while compressed silence/noise depends on the provider. File
+limit is 4,000,000 bytes plus at most 64,000 multipart bytes; upload reception is
+bounded to 15s. Temporary UploadFile spools/buffers close without permanent audio
+storage. No audio is saved to Supabase/Pinecone/LangSmith. No FFmpeg or local
+Whisper dependencies exist. ASR may be wrong; users should review question text.
 
-Audio/chat trigger paid requests. For public production access, use authenticated
-users, durable per-user/IP quotas or a gateway limiter, suitable Vercel Firewall
-rules, concurrency controls, and OpenAI project spend caps/alerts. CORS is not
-authentication; an in-memory limiter is not a global Vercel quota. This task does
-not implement a new authentication system or durable limiter. See the
-[official OpenAI file-transcription guidance](https://developers.openai.com/api/docs/guides/speech-to-text)
-for model support and current pricing links. No paid audio test runs automatically.
+Audio errors: 400 AUDIO_EMPTY; 408 AUDIO_UPLOAD_TIMEOUT; 413 AUDIO_TOO_LARGE;
+415 AUDIO_UNSUPPORTED_FORMAT; 422 AUDIO_INVALID/AUDIO_NO_SPEECH/VALIDATION_ERROR;
+429 AUDIO_RATE_LIMITED; 500 CONFIGURATION_ERROR; 502 AUDIO_TRANSCRIPTION_FAILED;
+503 AUDIO_UNAVAILABLE; 504 AUDIO_TIMEOUT. Provider bodies, file contents and
+credentials are not exposed in errors. Socket timeouts are not a hard kill deadline.
 
-### Evaluation commands (from backend/, venv activated)
+## Transcript caching and indexing
+
+Local auto mode: Supabase read → direct YouTube on miss → validate/confirm save →
+local idempotent indexing. Cache hits skip YouTube and ready manifests skip video
+re-embedding. Failed extraction does not overwrite valid cache. Production/preview
+read only cached captions and existing vectors, even if auto was misconfigured.
+
+Explicit local tools, only when you intend to contact real providers:
+
+```powershell
+python -m app.scripts.ingest_video "https://www.youtube.com/watch?v=VIDEO_ID_11"
+python -m app.scripts.index_cached_videos --video-id VIDEO_ID_11
+python -m app.scripts.precompute_summary --video-id VIDEO_ID_11 --detail brief
+```
+
+`--force` exists on ingestion/indexing and can incur rework/embedding charges; it
+is not automatic. Batch ingestion/indexing is explicit CLI work. Stable chunk IDs,
+fingerprinted namespaces, verified batches and a completion manifest support
+resume and avoid cross-video/stale-source retrieval. Old namespaces are retained.
+Do not run full indexing or long summary precomputation inside Vercel requests.
+
+Search checks original chunk text, video/fingerprint metadata and timestamps;
+float32 storage rounding never replaces exact original response timestamps.
+Time lookup uses chronological overlapping original captions and half-open bounds.
+Full/interval summaries cover all selected chunks or fail safely before oversized
+work, and cache canonical results in Supabase. Equivalent tool calls execute once
+per request, with valid native replies for every call ID. Provenance does not prove
+semantic support; reviewed references/human or optional judge review are required.
+
+## Conversation memory and tracing
+
+Supabase chat_sessions/chat_messages use leases plus token/revision checks and
+an atomic two-message exchange RPC. History is chronological and bounded; fresh
+sessions are isolated and cross-video UUID reuse is rejected. Failure cleanup is
+best-effort and leases expire. See the memory document for acknowledgement/retry
+and lease-clock limits. **UUIDs are sensitive identifiers, not authenticated user
+ownership.** There is no history-list endpoint or ownership/auth system yet.
+
+LANGSMITH_TRACING=true plus a private key enables existing restricted spans.
+Inputs/outputs, history, transcript text and audio are hidden; safe operation,
+video/environment/token counts and monotonic durations may be exported. Optional
+failures do not break the app. Default CLI offline mode disables all uploads.
+Logs/reports must never contain keys, auth headers, proxy URLs or conversation IDs.
+Redaction is best-effort for recognizable secrets, not universal PII removal.
+
+## Tests and evaluation
 
 ```powershell
 python -m pytest -q
+python -m pip check
 python -m app.evaluation.run --mode offline
 ```
 
-Offline is the default: scripted providers, no paid calls, no external services,
-no LangSmith uploads. The CLI blocks remote transports; Windows asyncio's internal
-loopback wakeup pipe remains allowed. It exercises actual services/tools and audio
-request handling. Reports are timestamped JSON, Markdown and CSV under
-`reports/evaluation/`; override with EVALUATION_OUTPUT_DIR or `--output-dir`.
-No `/api/evaluate` endpoint exists.
+Default tests mock external services and block unexpected network sends; no real
+keys are needed. The offline CLI exercises actual services/tools with scripted
+providers and synthetic captions. Windows internal loopback event-loop sockets
+are allowed, external services are blocked. Reports are ignored timestamped JSON,
+Markdown and CSV. There is no configured formatter/linter/type checker to install
+or upgrade; pytest, dependency consistency, compilation and diff checks are used.
 
-[Dataset schema, fixture provenance, curation and human review rubric](evaluation/README.md).
-The 18-case synthetic dataset covers facts, absent information, timestamps and
-out-of-range requests, whole/interval summaries, memory, single/combined tools,
-and six audio outcomes. It is a regression suite, not real model quality evidence.
-`curated.json` is an **unreviewed real-video template**, not verified ground truth.
-Before live use, replace its references after full-transcript review and pin each
-video's transcript SHA256. Changed transcripts invalidate references.
+[Evaluation schema, curation and human rubric](evaluation/README.md). The 18
+synthetic cases cover facts, unsupported questions, time intervals/out-of-range,
+summaries, memory, tools and six audio outcomes. Offline ASR is mocked, so WER is
+null. Mechanical pass/fail and phrase diagnostics do not prove real AI quality.
+Real templates in `curated.json` are unreviewed: manually replace questions,
+reference facts/ranges/tools, read the full cached transcript and pin its SHA256.
+Keep private references/recordings in ignored private* locations. Reports omit raw
+questions, answers, sources, audio and conversation UUIDs.
 
-Only when you intend to incur charges, with reviewed cached/indexed videos:
+Only after curation and explicit willingness to incur charges/transfer data:
 
 ```powershell
-$env:EVALUATION_ENABLE_LIVE = "true"
+$env:EVALUATION_ENABLE_LIVE = 'true'
 python -m app.evaluation.run --mode live --enable-live --dataset curated --max-examples 3 --max-model-calls 12
 Remove-Item Env:EVALUATION_ENABLE_LIVE
 ```
 
-Both environment and flag are required. A cost warning appears first. Live mode
-is sequential, limited to 1–5 examples, at most three turns each, and at most 30
-OpenAI call reservations across the entire run (default 12). Audio and optional
-judge calls share that cap; validation-only audio conservatively reserves a call.
-Each chat retains its existing resource bounds. Pinecone search embeddings are
-additional provider work within tool limits. No extraction or indexing runs.
-Test conversations/summaries persist normally in Supabase; no automatic deletion.
-
-Optional `--judge` sends selected question/reference/answer/verified sources to
-OpenAI using the documented rubric, never raw audio or full conversation history.
-It is a fallible semantic estimate. To measure live ASR, add a reviewed audio case
-with known text to a private real-level dataset, then use the same guarded CLI.
-Postman uploads also incur charges. Neither was executed automatically here.
-
-### LangSmith, metrics and limits of scores
-
-Existing optional tracing is reused. Request-local events record actual tool
-execution and monotonic timing, not guesses from answer text. Existing chat,
-memory, Pinecone, tools and LLM spans gain durations; `transcript.lookup` includes
-the caption database read, and audio adds `audio.request/transcription`.
-Nested timings overlap and must not be summed. Timing-only request logs contain
-no prompts, answers or recordings.
-
-With LANGSMITH_API_KEY configured privately and live opt-in enabled, optionally add:
-
-```powershell
-python -m app.evaluation.run --mode live --enable-live --dataset curated --max-examples 3 --max-model-calls 12 --upload-langsmith --experiment-name tubeinsight-day4-demo
-```
-
-The installed SDK creates a named dataset containing case IDs and a constant
-reference flag, then replays sanitized measured results as an experiment, without
-rerunning the agent. Feedback includes deterministic scores and original measured
-duration, with model config/revision metadata. Inputs/outputs stay hidden; no
-transcripts, histories or audio are uploaded. LangSmith replay-run durations
-measure replay overhead: use `measured_duration_seconds` feedback or local timings
-for application latency. SDK compatibility is tested; live uploads remain opt-in.
-See [LangSmith evaluation docs](https://docs.langchain.com/langsmith/evaluate-llm-application).
-
-Reports separate mechanical provenance/timestamp/range/video checks from semantic
-correctness/support. Actual tool events measure selection, extra calls, failures
-and call limits. Memory probes cover ordering, persistence over fresh apps,
-independent sessions, cross-video rejection and windows. Mean/p50/p95/max include
-sample sizes and warn that small-sample p95 is unstable. Live WER is normalized
-word edit distance; offline ASR accuracy stays null because speech output is mocked.
-
-Reference phrase coverage is diagnostic and never determines pass/fail. Canonical
-server abstention is recognized exactly, so adding an invented claim to a refusal
-cannot pass merely by keywords. A non-abstaining unsupported response is a failure
-but not alone proof of a specific fabrication. False-answer rate, semantic
-correctness and evidence support remain unknown until judged/reviewed. Mechanical
-passes cannot prove summary coverage or follow-up semantics. Offline fresh-app
-tests do not claim live DB or actual process-restart verification.
-
-Reports omit raw questions, answers, source text, audio and conversation IDs, and
-are Git-ignored. Keep private references/recordings in the ignored `private*`
-locations in the evaluation README. Share only reviewed public data/safe reports.
-
-FastAPI checks Supabase first. In local **auto** mode, submitting a new YouTube
-URL automatically fetches real captions directly, validates them, and saves them
-before returning success. Cached videos skip YouTube. Vercel and explicitly
-production-configured servers read saved captions only. Local and deployed
-backends must use the same Supabase project and Pinecone index. Chat now uses
-LangChain, OpenAI, and Pinecone to answer only from verified video evidence.
-
-## Day 3: tools, durable conversations, and tracing
-
-All functionality uses the existing `POST /api/chat/ask` request/response. No
-frontend files, TypeScript, Vite configuration, or frontend documentation change.
-The established `tubechunks` index still uses Pinecone-hosted
-`llama-text-embed-v2`, 1024 dimensions, `chunk_text`; OpenAI `gpt-6-luna` answers.
-The initial Day 3 document's OpenAI-embedding description does not replace the
-working, user-selected Day 2 index configuration.
-
-### Apply the database migration
-
-After migration 001, open the matching Supabase project → SQL Editor → New query.
-Paste **all** of [002_chat_memory_and_summaries.sql](migrations/002_chat_memory_and_summaries.sql)
-and Run as the project owner. The file includes BEGIN/COMMIT and schema reload.
-Do not paste the backend `.env` or keys into SQL Editor or chat. Existing tables
-are preserved. This migration is rerunnable for this schema, but is not intended
-to repair unrelated tables with the same names.
-
-The migration creates `chat_sessions`, `chat_messages`, and `video_summary_cache`,
-enables RLS with no public policies, and revokes anon/authenticated/PUBLIC access.
-The server role can read history and summary cache, and executes three narrowly
-scoped SECURITY DEFINER RPCs with an empty search path. It cannot directly mutate
-session/message tables. No new public HTTP history/list endpoints are added.
-`MEMORY_NOT_CONFIGURED` explains a missing migration.
-
-A `sb_secret_` backend key supports data operations, not arbitrary schema SQL.
-For command-line schema deployment, use an authenticated Supabase administration
-workflow and database credentials; the service key alone cannot apply this file.
-Never expose administration or service keys to React.
-
-### Three actual LangChain tools
-
-- `search_transcript(query)`: reuses Day 2's validated, video-specific Pinecone
-  retrieval, returning original text, exact Supabase timestamps, chunk index,
-  similarity score, and server-issued evidence IDs. It never indexes a video.
-- `get_transcript_segment(start_seconds, end_seconds=None)`: reads the selected
-  video's original Supabase snapshot and returns chronologically sorted overlapping
-  captions. It uses no Pinecone. Numeric seconds, `MM:SS`, `HH:MM:SS`, and unit
-  strings such as `5 minutes` are validated. A single timestamp gets a 30-second
-  surrounding window. Default maximum interval is 600 seconds; excessively large
-  text fails clearly. Out-of-range intervals return no evidence. Whole captions
-  retain their actual boundaries, even when a requested interval cuts through one.
-- `summarize_video(detail, start_seconds=None, end_seconds=None)`: covers
-  every caption in the whole video or the requested interval, with brief/detailed
-  styles; the final agent formats the result for requests such as five takeaways. It never substitutes
-  a few semantic search hits for complete-video coverage.
-
-The agent uses installed LangChain `StructuredTool`, native
-`ChatOpenAI.bind_tools`, `AIMessage`/`ToolMessage`, and a validated structured final
-answer. It performs a bounded plan/act/answer cycle: the model selects one or more
-real typed tools, the server executes them, and the model synthesizes verified
-results. This is actual function calling, not tool-name text in a prompt. No
-LangGraph/deprecated agent APIs or new agent runtime are necessary. The configured
-`gpt-6-luna` uses `reasoning_effort=none`, required for its Chat Completions tool
-calling. Unsupported models/tool output fail clearly rather than silently falling
-back to plain chat. No tools accept an arbitrary LLM-supplied video ID.
-
-History resolves references such as “the second one”, but is never factual video
-evidence. Transcript/history/tool material is untrusted data. Only tools provide
-facts; final citation IDs must refer to actual tool results. Source text and
-numeric timing are generated by the server from original captions, not by the
-model. The source/answer response schema remains unchanged.
-
-### Reliable memory and concurrency
-
-On the first message, a database RPC creates an unpredictable UUID session bound
-to the selected video. A short database lease serializes work across separate
-FastAPI/Vercel processes. A concurrent request receives `CONVERSATION_BUSY` (409).
-After successful generation, one RPC transaction writes the user and assistant
-messages together, advances monotonically increasing sequence numbers/revision,
-and releases the lease **before HTTP success**. It never saves a half exchange.
-Token/revision checks prevent a stale worker from overwriting a newer request.
-
-Follow-ups load newest messages from Supabase in sequence order, reverse them to
-chronological context, and bound the context (12 messages / 12000 characters by
-default). There is no dictionary-based authoritative memory. Failures release the
-lease best-effort; an abandoned worker's lease expires. A failed new conversation
-is removed if still empty. A lost HTTP acknowledgment after a committed exchange
-can lead to a repeated user exchange on a manual retry; ordering remains atomic.
-There is no mandatory client idempotency field.
-
-Existing UUIDs work after restarts and across Vercel instances. Unknown IDs and
-cross-video reuse return `CONVERSATION_NOT_FOUND`. A new null ID starts isolated
-history. The existing React component still owns its visible message list; this
-backend task does not add UI history restoration after browser refresh.
-
-**Authorization limitation:** the app has no account ownership model. The UUID
-acts as a sensitive session identifier, not proof of a user account. Anyone who
-obtains it can use that session for its associated video. RLS plus a server secret
-is not per-user authorization. Add authenticated ownership before private
-multi-user accounts. No unauthenticated conversation list/history endpoint exists.
-Known configured keys and recognizable token patterns are masked before model use
-and history storage; arbitrary personal information is not automatically detected.
-Do not send secrets in questions. Internal reasoning/tool messages are not stored.
-
-### Complete summaries and precomputation
-
-The summarizer chunks the entire selected transcript, then maps complete batches
-(up to 8000 characters each), and synthesizes all batch notes. The default three
-batch limit and shared model/time budgets bound serverless work. Results and exact
-source excerpts are cached durably by transcript/configuration/detail/range
-fingerprint. Changed transcripts/settings get a new cache key. Cached results are
-validated against the current original source spans before reuse.
-
-Oversized uncached videos return `SUMMARY_TOO_LONG` without summarizing just their
-beginning. Explicitly precompute **one** saved video locally when appropriate:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.scripts.precompute_summary --video-id VIDEO_ID --detail brief --max-batches 12
-```
-
-This does not fetch YouTube, generate vector embeddings, or require frontend
-changes. It increases only the local summary budget (up to 600 seconds). More
-batches can cost more LLM calls; do not run large precomputations casually. This
-command is never run automatically. A successful cached summary can then be read
-quickly by Vercel using the same model/chunk/detail settings.
-
-### Optional LangSmith tracing
-
-Add privately to `backend/.env` or backend Vercel settings:
-
-```dotenv
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY=your-private-langsmith-key
-LANGSMITH_PROJECT=tubeInsight-ai
-```
-
-Missing/false tracing keeps it off. Enabled tracing without a key warns safely and
-stays off. Connectivity/export failures are best-effort and never replace normal
-application errors or answers. The installed supported LangSmith client/trace APIs
-are used; the direct dependency is pinned to `langsmith==0.14.17`.
-
-Explicit spans cover incoming chat, agent execution, selected tools, retrieval,
-summary map/synthesis, model invocation, and memory operations. Metadata includes
-operation, environment, video ID, and available token counts; span timing supplies
-latency. No conversation/session UUID, keys, question, history, transcript, raw
-prompt/response, provider exception body, or internal reasoning is exported.
-Client hide_inputs/hide_outputs and disabled automatic LangChain payload tracing
-keep nested model prompts out of LangSmith. Errors are reduced to safe codes.
-
-In LangSmith, open project `tubeInsight-ai`, send a small chat request, and inspect
-`chat.request` → `agent.execution` → selected tool / model spans. Inputs/outputs
-should be empty. This intentionally trades prompt inspection for privacy. Export
-uses the SDK's background batching with bounded network timeout/no retries;
-a bounded 0.5-second flush runs after each request. Telemetry is noncritical and
-can still be incomplete if a serverless process freezes. SDK diagnostic logs are
-generic so even masked credential fragments are not logged.
-Persistence and summaries never depend on those background exports.
-
-### Local and Postman verification
-
-Apply migration 002, preserve existing backend keys/index configuration, then run
-from `backend/` with the project's interpreter:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
-
-POST `http://localhost:8000/api/chat/ask` with JSON. Use a saved/indexed short video
-for the first checks. For example, `dQw4w9WgXcQ` was used in Day 2 verification:
-
-```json
-{"video_id":"dQw4w9WgXcQ","question":"What does the singer promise?","conversation_id":null}
-```
-
-Reuse the returned UUID for each follow-up. Try these questions through the SAME
-endpoint (no frontend change):
-
-1. Topic search: `What does the speaker say about the main topic?`
-2. Point lookup: `Explain what is said at 02:30.`
-3. Interval lookup: `What is said between 1 and 2 minutes?`
-4. Full summary: `Summarize the whole video in five takeaways.`
-5. Range summary: `Summarize 00:30 to 01:30.`
-6. Memory: after a numbered answer, `Explain the second one in more detail.`
-7. Restart FastAPI and send a follow-up with that same UUID; context should remain.
-8. Use null for a new conversation; it must not inherit previous context.
-9. Reuse the UUID with another video; expect `CONVERSATION_NOT_FOUND`.
-10. Enable optional tracing and inspect the redacted tool spans in LangSmith.
-
-Normal automated tests mock every external API. Small live checks require the
-migration and real keys. No high-volume live testing or bulk LLM runs are automatic.
-
-### Limits, errors, and Vercel
-
-Safe defaults are in `.env.example`: `CHAT_HISTORY_MESSAGES=12`,
-`CHAT_HISTORY_CHARS=12000`, `AGENT_MAX_TOOL_CALLS=3`, `AGENT_MAX_MODEL_CALLS=6`,
-`AGENT_REQUEST_BUDGET_SECONDS=45`, `TRANSCRIPT_MAX_WINDOW_SECONDS=600`,
-`TRANSCRIPT_POINT_WINDOW_SECONDS=30`, `TOOL_MAX_TEXT_CHARS=14000`,
-`SUMMARY_BATCH_CHARS=8000`, `SUMMARY_MAX_BATCHES=3`. Models use at most 8-second
-socket waits and no SDK retries in the agent. Budgets are checked between bounded
-operations; they are not a hard process interrupt. Configure Vercel request duration
-to cover your chosen budget plus database/network overhead and stay below the
-existing frontend timeout. Oversized requests fail explicitly; no frontend timeout
-or configuration is modified here.
-
-Additional errors retain `error.code` / `error.message`: `MEMORY_NOT_CONFIGURED`,
-`CONVERSATION_BUSY`, `INVALID_CHAT_HISTORY`, `INVALID_TIME_RANGE`,
-`INVALID_TOOL_ARGUMENTS`, `SEGMENT_TOO_LARGE`, `SUMMARY_TOO_LONG`,
-`INVALID_SUMMARY_CACHE`, `MODEL_TOOL_INCOMPATIBLE`, `AGENT_TOOL_ERROR`,
-`AGENT_LIMIT_REACHED`, and `AGENT_TIMEOUT`. All existing Day 1/2 errors remain.
-
-Before deployment: apply migration 002 to the shared project, run the backend tests,
-configure the same backend Supabase/OpenAI/Pinecone settings, use
-`APP_ENV=production` / `TRANSCRIPT_SOURCE=supabase`, set exact frontend CORS origins,
-and optionally configure the three LangSmith variables. Verify a short cached
-video and follow-up with Postman. Do not change embedding/index settings. YouTube
-access remains forbidden on Vercel. No commit, push, or deployment is automatic.
-
-## Real RAG setup and indexing
-
-Use the existing **tubechunks** Pinecone index: dense vectors, **1024 dimensions**,
-cosine similarity, with the `chunk_text` string field embedded by
-**llama-text-embed-v2**. This is the user's selected replacement for the original
-OpenAI-embedding/1536-dimensional plan. OpenAI `gpt-6-luna` generates the answers;
-Pinecone generates passage and query embeddings using the SAME Llama model.
-OpenAI embeddings are not used or mixed into this index. Nothing creates, deletes,
-resizes, or changes the index schema.
-
-Add these server-only values to the existing untracked `backend/.env`:
-
-```dotenv
-OPENAI_API_KEY=your-private-openai-key
-OPENAI_CHAT_MODEL=gpt-6-luna
-PINECONE_EMBEDDING_MODEL=llama-text-embed-v2
-PINECONE_EMBEDDING_FIELD=chunk_text
-PINECONE_EMBEDDING_DIMENSIONS=1024
-PINECONE_API_KEY=your-private-pinecone-key
-PINECONE_INDEX_NAME=tubechunks
-RAG_CHUNK_SIZE=1000
-RAG_CHUNK_OVERLAP=180
-RAG_EMBED_BATCH_SIZE=32
-RAG_TOP_K=4
-RAG_MIN_SCORE=0.25
-RAG_API_TIMEOUT_SECONDS=10
-RAG_INDEX_TIMEOUT_SECONDS=90
-RAG_MAX_CHUNKS=2000
-```
-
-Keep the existing Supabase keys and local `APP_ENV=development`,
-`TRANSCRIPT_SOURCE=auto`. Shell environment variables override `.env`; restart
-FastAPI after edits. Missing keys/model/index settings return safe setup errors.
-The provider checks the existing embedded-text field, Llama model, dimensions,
-cosine metric, stored text, and readiness before writing. Set the same model, dimensions, chunk size,
-overlap, and index name on Vercel so fingerprints match.
-
-**Local React workflow:** paste a URL and click Process. Supabase is checked
-first; missing captions are fetched directly and saved exactly as before. The
-saved transcript is then chunked and indexed before success. Existing saved
-videos are indexed too. Repeat processing checks a completion manifest and skips
-embeddings. Indexing failures return a clear error while preserving saved captions;
-retry processing after fixing the cause. No critical persistence uses background
-tasks. Production processing only returns Supabase captions and never indexes.
-
-**Backfill one saved video**, from `backend/`:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.scripts.index_cached_videos --video-id Gfr50f6ZBvo
-```
-
-This command never calls YouTube. Repeating it is idempotent. `--force` explicitly
-regenerates the current version's embeddings and may add usage. Bulk backfill is
-an explicit user action; it is never run automatically:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.scripts.index_cached_videos --all --limit 10
-```
-
-IDs are paged from Supabase without loading all full transcripts at once. Each
-video is read and processed independently; failures are reported, and the exit
-code is nonzero if any failed. The CLI refuses production/Vercel environments.
-
-### Chunking, idempotency, and evidence
-
-LangChain's recursive character splitter targets 1000 characters with 180-character
-overlap and prefers caption/sentence/word boundaries. Character spans map each
-chunk to the original contributing segments. Start is their actual minimum start;
-end is their actual maximum end. A chunk splitting one long caption retains that
-caption's real range; no interpolated timestamps are invented. Pinecone metadata
-includes `video_id`, `chunk_index`, `text`, timestamps, character/segment spans,
-and a transcript/embedding/chunking fingerprint.
-
-Each video/fingerprint has its own namespace and stable document IDs. Hosted
-embeddings are batched (32 documents by default), upserts are idempotent, and interrupted runs reuse
-confirmed chunks. A separate completion manifest is written only after all chunk
-metadata/text is visible. A changed transcript, model, dimensions, or chunking
-setting gets a new isolated namespace; chat never uses stale versions. Old
-namespaces are retained to avoid deleting valid data. They consume storage and
-can be cleaned administratively after confirming they are unused. Concurrent
-indexers in separate processes may duplicate embedding work, though their stable
-IDs prevent duplicate stored chunks.
-
-Chat validates the manifest, asks Pinecone to embed the question, and retrieves top-k=4
-within that exact namespace plus video/fingerprint/kind metadata filters. Returned
-text, timestamps, and identity are checked against freshly read Supabase captions.
-Cross-video, tampered, and low-score matches are rejected. The model selects
-citation IDs; excerpts and timestamps come from the server, never model quotes.
-The relevance threshold is configurable and needs evaluation for your videos.
-
-LangChain LCEL (`ChatPromptTemplate | ChatOpenAI.with_structured_output`) uses the
-configured model with native JSON schema and no agent/tools.
-
-`langchain-pinecone==0.2.13` pins Pinecone SDK <8, whose vector endpoints cannot
-read this newer document-schema index. `DocumentVectorStore` extends its store
-interface with the current documented Pinecone 2026-07 documents API, over bounded
-HTTPX calls. This preserves a compatible dependency set and the existing index.
-It uses text upserts and `score_by: embed` searches; it never fabricates vectors.
-See Pinecone's [upsert](https://docs.pinecone.io/reference/api/2026-07/data-plane/upsert_documents)
-and [search](https://docs.pinecone.io/reference/api/2026-07/data-plane/search_documents) APIs. The requested
-`gpt-6-luna` supports structured output; the installed integration is tested with
-mock HTTP at the SDK boundary. Transcripts are untrusted data, never system
-instructions. When evidence is absent or insufficient, the API returns an honest
-inability-to-answer message with `sources: []`; it never substitutes a fake answer.
-
-### Real chat verification
-
-From the repo root, start the backend with its own interpreter:
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
-
-In Postman, POST `http://localhost:8000/api/chat/ask`, Body → raw → JSON:
-
-```json
-{
-  "video_id": "Gfr50f6ZBvo",
-  "question": "What are the main ideas discussed?",
-  "conversation_id": null
-}
-```
-
-Index that saved ID first. Expect `mode: "real"`, a grounded `answer`, a UUID, and
-actual `sources` with numeric second timestamps. Reuse the UUID on the same video.
-Ask a question absent from the video; expect an inability-to-answer message and
-no sources. Try an unindexed different video; expect `VIDEO_NOT_INDEXED`, never
-sources from the first video. Invalid/blank questions return the existing 422
-format. Questions are bounded to 4000 characters and 8000 UTF-8 bytes.
-
-In React, process the video, ask a question, inspect its excerpts, and click the
-existing timestamp links. The layout and history rendering are unchanged; chat
-mode types now accept `real`. Local React still defaults to localhost:8000.
-
-### RAG errors, timeouts, and usage
-
-`VIDEO_NOT_INDEXED` (409) means index the current transcript/configuration locally.
-`PINECONE_INDEX_NOT_FOUND` / `PINECONE_INDEX_INCOMPATIBLE` (500) explain setup
-problems. `RAG_RATE_LIMITED` (429), `RAG_UNAVAILABLE` (503), `RAG_TIMEOUT` (504),
-and `RAG_RESPONSE_INVALID` (502) never return a fake successful answer.
-`INDEXING_PENDING` (503), `INDEXING_TIMEOUT` (504), or `INDEXING_LIMIT_EXCEEDED`
-(422) preserve the Supabase transcript. All retain `error.code`/`error.message`.
-
-Provider requests default to 10-second socket timeouts. OpenAI retries at most
-once; Pinecone document calls are not retried automatically. Pinecone visibility polls are
-limited to four attempts. The local indexing budget (90 seconds) is checked
-between bounded operations, not a strict wall-clock interrupt. UI processing
-has a 180-second deadline, chat 90 seconds, and health 15 seconds. Long videos
-may need a higher local budget/limit or explicit CLI retries; no serverless chat
-request indexes a full video. Failed runs can resume confirmed batches.
-
-Initial Pinecone indexing embeds approximately total transcript tokens plus overlap
-and one short completion-marker document;
-subsequent unchanged indexing makes no embedding calls. Each question adds one
-Pinecone-hosted query embedding plus one bounded-context OpenAI chat generation, unless retrieval
-finds no qualifying evidence. OpenAI/Pinecone usage may be billable depending on
-your accounts. Budget from token counts and provider rates rather than assuming
-free requests. Normal tests use mocks and require no real credentials. No bulk
-live indexing is performed without explicit authorization.
-
-Day 3 replaces process-local chat state with durable video-bound Supabase sessions.
-The tool agent receives bounded prior context, while every answer still needs
-current transcript evidence. Optional LangSmith traces use redacted spans only.
-
-For Vercel, add the same OpenAI/Pinecone settings above, existing Supabase keys,
-`APP_ENV=production`, `TRANSCRIPT_SOURCE=supabase`, and exact frontend CORS origins.
-Use identical chunk/embedding settings to local indexing. The deployed frontend's
-`VITE_API_BASE_URL` points to the deployed FastAPI origin; keys remain backend-only.
-The health endpoint keeps its legacy response fields for compatibility; its
-`mode: "mock"` does not describe the now-real chat endpoint. Deployment is manual.
-
-## Install
-
-Use Python 3.11+; the pinned official `supabase==2.34.0` SDK requires it.
-Local verification uses Python 3.12. From the repository root in PowerShell:
-
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-# Initial setup only; preserve an existing .env and add the new variables.
-Copy-Item .env.example .env
-```
-
-Activation is optional. On macOS/Linux use `python3` and `.venv/bin/python`.
-The official Supabase SDK uses HTTPS; no ORM or direct PostgreSQL driver is added.
-
-## Supabase project and migration
-
-1. Sign in at [Supabase](https://supabase.com/dashboard), choose **New project**,
-   and use the Free plan if creating a free organization. Choose a name, database
-   password, and region, then wait for provisioning. No project is created
-   automatically by this code.
-2. Copy the **Project URL** from the **Connect** dialog or Data API settings.
-   Use the HTTPS project origin, e.g. `https://your-project.supabase.co`, without
-   `/rest/v1` or other paths.
-3. In **Settings â†’ API Keys**, create/copy a server-side **Secret key** starting
-   with `sb_secret_`. This is not your database password, account access token,
-   publishable key, or legacy anon key. See [Supabase's key documentation](https://supabase.com/docs/guides/getting-started/api-keys).
-4. Open **SQL Editor â†’ New query**, paste all of
-   [001_create_videos.sql](migrations/001_create_videos.sql), and run it as the
-   project owner. It creates `public.videos`, enables RLS, revokes public/anon/
-   authenticated access, and grants the server role SELECT/INSERT/UPDATE. No
-   public policies are created. The trigger preserves `created_at` and advances
-   `updated_at` on updates.
-5. Open **Table Editor â†’ videos** to inspect saved rows and their JSONB transcript
-   arrays after ingestion. Table Editor uses your administrative project access;
-   public access remains disabled.
-
-The migration is transactional and can be rerun for this schema. It does not
-reconcile an unrelated existing `videos` table with different columns.
-Repository validation rejects empty/all-blank transcripts, invalid types,
-nonfinite timestamps, and end times before start times. The SQL constraint also
-requires a nonempty JSON array. Upserts use `video_id` as the conflict key, do
-not delete first, and preserve caption order, gaps, overlaps, and fractional seconds.
-
-## Environment
-
-Edit the untracked `backend/.env` locally:
-
-```dotenv
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SECRET_KEY=sb_secret_your-real-server-side-key
-APP_ENV=development
-TRANSCRIPT_SOURCE=auto
-SUPABASE_TIMEOUT_SECONDS=10
-CORS_ORIGINS=http://localhost:5173,http://localhost:3000
-```
-
-Never commit real keys, put them in React, use `VITE_` prefixes, or send them in
-public API requests. Both the app and CLI load `backend/.env`; shell variables
-have precedence. Missing configuration produces a safe `CONFIGURATION_ERROR`.
-Health/Swagger remain usable before Supabase is configured.
-
-`TRANSCRIPT_SOURCE=auto` enables local cache-first extraction and saving through
-`POST /api/videos/process`; there is no required manual ingestion step.
-`TRANSCRIPT_SOURCE=supabase` reads saved captions only, including locally. If unset,
-it defaults to `supabase`; unknown values return `CONFIGURATION_ERROR`.
-
-The server forces cache-only mode when `VERCEL=1`, when `VERCEL_ENV` is
-`production`, `preview`, or `development`, or when `APP_ENV` is `production`/`prod`.
-These server-side checks override an accidental `auto` setting. CLI and provider
-entry points also refuse extraction in these environments. The browser's address
-never determines backend policy. Vercel's [system variables](https://vercel.com/docs/environment-variables/system-environment-variables)
-identify its runtime, including preview deployments.
-
-Supabase uses a 10-second read/write/pool inactivity timeout, at most 3 seconds
-for connection, and no SDK retries. `SUPABASE_TIMEOUT_SECONDS` must be finite, positive, and at most 30.
-Redirects, auth persistence, and auth refresh are disabled. Clients close after
-each operation. These are inactivity bounds, not a strict overall deadline.
-
-### Current secret-key compatibility
-
-SDK 2.34.0 accepts `sb_secret_` keys but copies its key into `apikey` and
-`Authorization: Bearer`. Modern secret keys are not JWTs. Our scoped HTTPX request
-hook removes only that exact non-JWT Bearer copy and retains the SDK's `apikey`
-header. It does not replace the SDK or silently substitute a legacy key.
-Mocked HTTPS tests verify the actual headers. This implementation requires the
-current server-side secret format. See [Supabase's key limitations](https://supabase.com/docs/guides/getting-started/api-keys#known-limitations).
-
-## Optional local ingestion CLI
-
-The React Process button performs ingestion automatically in local `auto` mode.
-The CLI remains available for batches, explicit refresh, and preparing deployment
-data without using the frontend.
-
-From `backend/`:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.scripts.ingest_video "https://www.youtube.com/watch?v=Gfr50f6ZBvo"
-```
-
-The script validates the URL, checks Supabase, skips extraction if already cached,
-otherwise fetches original captions locally and upserts the validated record. It
-prints the actual segment count, selected language, and saved/cached status.
-Unknown title/duration stay null; the thumbnail is built from the actual video ID.
-
-Explicit refresh:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.scripts.ingest_video "https://youtu.be/Gfr50f6ZBvo" --force
-```
-
-Failed extraction/validation does not overwrite the old transcript. Failed writes
-never trigger deletion. A successful refresh atomically replaces the single row.
-`--force` can repair a corrupt stored transcript after successful extraction,
-but does not bypass database connectivity/configuration failures. A cached HTTP
-request returns existing metadata unchanged. Unknown metadata remains null;
-no title or duration is fabricated.
-
-Batch ingestion accepts one URL per line in a UTF-8 file. Blank lines and lines
-starting with `#` are ignored; URLs are processed independently:
-
-```powershell
-Set-Content -LiteralPath videos.txt -Encoding utf8 -Value @("https://youtu.be/Gfr50f6ZBvo", "https://youtu.be/dQw4w9WgXcQ")
-.\.venv\Scripts\python.exe -m app.scripts.ingest_videos videos.txt
-.\.venv\Scripts\python.exe -m app.scripts.ingest_videos videos.txt --force
-```
-
-The summary reports saved/cached/failure/success counts. Exit status is 0 on
-success, 1 on failure. Errors contain safe messages, not raw exceptions. No HTTP
-ingestion endpoint exists, and ingestion refuses to run in any Vercel or production environment.
-
-### Existing local caption options
-
-The previous watch/short-link/Shorts validator is retained. Manual and automatic
-captions are supported. English (including regional tracks) is preferred by
-default; manual wins within a preferred language, while English automatic captions
-outrank a manual foreign-language track. Other original languages can be selected;
-no translation occurs. End time remains caption start plus actual duration.
-
-| Local-only variable | Default |
-| --- | --- |
-| `YOUTUBE_CAPTION_LANGUAGES` | `en` |
-| `YOUTUBE_CAPTION_FALLBACK` | `true` |
-| `YOUTUBE_CONNECT_TIMEOUT_SECONDS` | `3` |
-| `YOUTUBE_READ_TIMEOUT_SECONDS` | `10` |
-| `YOUTUBE_REQUEST_BUDGET_SECONDS` | `30` |
-
-Caption extraction uses direct connections only. No proxy account or credentials
-are needed. The provider ignores ambient HTTP proxy settings, caps extraction at
-six HTTP sends, allows at most three redirects, and uses the timeouts above.
-There are no automatic retries. The request budget bounds new sends and socket
-waits; it is not a strict overall wall-clock deadline. YouTube may still block a
-local IP or have no captions; these cases return clear errors without saving data.
-The selected original caption language is stored internally, without adding an
-API field. See the [caption provider documentation](https://github.com/jdepoix/youtube-transcript-api).
-
-## API and local server
-
-Run this from `backend/` using the project's own interpreter, even if another
-virtual environment is already activated in your terminal:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
-
-Open [Swagger](http://localhost:8000/docs), [OpenAPI](http://localhost:8000/openapi.json),
-the [API contract](../docs/api-contract.md), or [TypeScript interfaces](../docs/api-types.ts).
-
-```powershell
-Invoke-RestMethod http://localhost:8000/api/health
-Invoke-RestMethod http://localhost:8000/api/videos/process -Method Post -ContentType 'application/json' -Body '{"url":"https://youtu.be/Gfr50f6ZBvo"}'
-Invoke-RestMethod http://localhost:8000/api/chat/ask -Method Post -ContentType 'application/json' -Body '{"video_id":"Gfr50f6ZBvo","question":"What is this video about?","conversation_id":null}'
-```
-
-Processing reads Supabase first and, in local auto mode only, fetches and saves
-missing captions before returning. Chat recognizes saved video IDs without a prior
-process request; chat requires an indexed transcript and returns `mode: "real"`
-with validated retrieved sources.
-In cache-only mode a missing saved video returns `TRANSCRIPT_NOT_CACHED`
-(processing) or
-`VIDEO_NOT_FOUND` (chat), both 404. Invalid URLs still return 400.
-
-### Local page stays on Processing
-
-Check `http://localhost:8000/api/health` first. It should respond quickly without
-accessing Supabase or YouTube. If it hangs, stop the local Uvicorn process and
-restart it with the project interpreter shown above. Check the terminal for a
-failed reload or missing dependency; an unrelated activated environment may not
-contain this backend's requirements.
-
-The frontend defaults to `http://localhost:8000`. If `VITE_API_BASE_URL` is set,
-verify it points to the intended backend and restart Vite after changing it.
-Video processing, including reading its response body, times out after 180 seconds
-to allow extraction, saving, and indexing. Connectivity checks retain a
-15-second health timeout and 90-second chat timeout. Failures display an error
-and release the button.
-
-For automatic local processing, set `APP_ENV=development` and
-`TRANSCRIPT_SOURCE=auto` in `backend/.env` and restart FastAPI. Paste a new URL and
-click Process. It is saved automatically; subsequent requests and the deployed
-backend can read it from the same database. If localhost still returns "not
-prepared yet", check inherited shell variables, which take precedence over `.env`.
-Applying the migration creates the table; the first local auto request fills it.
-
-## Vercel and frontend verification
-
-In the existing **backend project** environment settings add:
-
-- `SUPABASE_URL`
-- `SUPABASE_SECRET_KEY` as a Secret/sensitive value
-- `APP_ENV=production`
-- `TRANSCRIPT_SOURCE=supabase`
-- `CORS_ORIGINS` with exact deployed React origin(s)
-- Optional `SUPABASE_TIMEOUT_SECONDS=10`
-
-Retain the working Python runtime/entrypoint settings. Dependencies resolve from
-`backend/requirements.txt`; the existing ASGI application is `app.main:app`.
-This repository snapshot has no tracked Vercel configuration to verify dashboard
-settings against. When ready, redeploy the backend with this code and variables.
-Variable changes apply to new deployments, as described by [Vercel](https://vercel.com/docs/environment-variables).
-No commit, push, deployment, or project creation is automated by this task.
-
-In **Postman**, GET `https://YOUR-BACKEND.vercel.app/api/health`. After local
-ingestion, POST `/api/videos/process` with raw JSON
-`{ "url": "https://youtu.be/Gfr50f6ZBvo" }`. Expect 200, `ready`, `real`, and the
-same saved captions with numeric second timestamps. Repeat to verify persistent
-retrieval. Do not send a Supabase key. A valid unprepared ID returns 404
-`TRANSCRIPT_NOT_CACHED`, never a YouTube fallback. POST `/api/chat/ask` with that
-saved/indexed ID, a question, and null conversation ID; expect a real grounded answer.
-
-Open deployed React, load the prepared URL, inspect transcript/timestamp links,
-and send a question. Try an unprepared URL and confirm its readable error. Anita
-needs no request, success-schema, component, or environment change if the backend
-base URL stays the same. This intentionally supports prepared videos and does
-not fetch arbitrary new videos on Vercel.
-
-## Errors and remaining limits
-
-All errors retain `{ "error": { "code": "...", "message": "..." } }`.
-
-| HTTP | Code | Meaning |
-| --- | --- | --- |
-| 400 | `INVALID_YOUTUBE_URL` | Malformed/unsupported URL or ID |
-| 404 | `TRANSCRIPT_NOT_CACHED` | Video has not been prepared |
-| 404 | `VIDEO_NOT_FOUND` | Chat video is not saved |
-| 404 | `CONVERSATION_NOT_FOUND` | Unknown/expired UUID or wrong video |
-| 422 | `VALIDATION_ERROR` | Invalid request or record to save |
-| 500 | `CONFIGURATION_ERROR` | Missing/invalid backend settings |
-| 500 | `INTERNAL_SERVER_ERROR` | Unexpected failure |
-| 502 | `INVALID_STORED_TRANSCRIPT` | Corrupt captions; reingest locally with `--force` |
-| 503 | `DATABASE_UNAVAILABLE` | Supabase network/auth/permission/schema failure |
-
-Local auto processing and the CLI retain the existing YouTube errors, including
-`TRANSCRIPT_NOT_AVAILABLE` (404), `VIDEO_UNAVAILABLE` (403/404),
-`YOUTUBE_RATE_LIMITED` (429), `YOUTUBE_ACCESS_BLOCKED` (503),
-`TRANSCRIPT_FETCH_FAILED` (502), and `TRANSCRIPT_FETCH_TIMEOUT` (504).
-Production requests
-never contact YouTube on these failures. Database errors do not become cache
-misses or fake success. Service logs/output do not include keys, auth headers,
-raw database errors, or signed caption URLs.
-
-Videos, summaries, and conversation exchanges persist in Supabase across Vercel
-instances. See the Day 3 section for bounded context and session authorization limits.
-
-## Automated and optional live checks
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -v
-```
-
-Ordinary tests mock Supabase and YouTube, block unexpected network sends, and need
-no real keys. SDK tests exercise real query builders over MockTransport, including
-headers, atomic upserts, repeated reads, errors, and cleanup. CLI tests cover
-skip/force/batch failures; API tests cover automatic fetch/save, cache reuse,
-failed extraction/writes, production and preview guards, health/chat, CORS, and
-schemas. Direct-provider tests verify that no proxy configuration is used.
-
-The opt-in local caption test uses `RUN_YOUTUBE_INTEGRATION=1`. The separate live
-storage test requires a migrated project, local credentials, and explicit opt-in:
-
-```powershell
-$env:RUN_SUPABASE_INTEGRATION='1'
-.\.venv\Scripts\python.exe -m pytest tests/test_live_supabase.py -v -s
-Remove-Item Env:RUN_SUPABASE_INTEGRATION
-```
-
-It may ingest the public test video if missing, then reads its genuine transcript
-repeatedly through the repository/API. It never writes fake test captions to your
-project. Live project/deployed API/browser verification must be reported separately;
-mocked tests do not establish deployment success.
-
-Next: evaluate tool/retrieval quality and add authenticated ownership and voice.
-No agents, new database, or automatic deployment are introduced.
+Live mode requires both guards, prints a warning, is sequential, allows at most
+five cases/three turns each and 30 OpenAI call reservations (default 12). Existing
+per-request limits remain. Audio and optional `--judge` share that cap; Pinecone
+query embeddings are additional bounded provider work. No extraction/indexing
+runs. Normal test conversations and summaries persist in Supabase. A reviewed
+real-level audio dataset can measure actual WER, with the same explicit guards.
+
+Optional `--judge` applies the explicit fallible semantic rubric to verified sources.
+Optional `--upload-langsmith --experiment-name tubeinsight-demo` creates a named
+case-ID-only dataset and replays sanitized measured results as an experiment,
+without another model run. Inputs/outputs remain hidden; explicit feedback carries
+scores and original duration. LangSmith replay durations are export overhead; use
+measured_duration_seconds feedback/local spans for app latency. No raw content or
+audio is uploaded. Both features are live-only and disabled by default.
+
+The two legacy integration tests require RUN_YOUTUBE_INTEGRATION or
+RUN_SUPABASE_INTEGRATION and appropriate configured providers; the Supabase test
+may ingest if missing. They are skipped by default and were not enabled in Day 5.
+Do not confuse those with paid RAG/audio semantic evaluations or human review.
+
+## Manual Vercel deployment and verification
+
+No commit, push or deployment is performed automatically. The current repo has no
+checked-in Vercel configuration to audit; existing dashboard settings are not
+inspected. Preserve the working project/entrypoint. For a backend-only project,
+use backend as Root Directory and FastAPI preset/entry app/main.py exporting app;
+verify this against the current [Vercel FastAPI guide](https://vercel.com/kb/guide/ship-a-fastapi-app-on-vercel).
+Do not modify Anita's frontend project to deploy this backend.
+
+1. Review the diff and run tests/offline evaluation. Curate at least one public
+   cached/indexed demo video locally, only with explicit provider-call authorization.
+2. Verify migrations 001/002 in the intended Supabase project. Day 5 adds no SQL.
+3. In backend project Settings → Environment Variables, set private Supabase,
+   OpenAI and Pinecone credentials; preserve the matching Llama index settings.
+   Set APP_ENV=production, TRANSCRIPT_SOURCE=supabase, exact CORS_ORIGINS,
+   OPENAI_CHAT_MODEL=gpt-6-luna, OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe,
+   MAX_AUDIO_UPLOAD_MB=4, AUDIO_TIMEOUT_SECONDS=20, EVALUATION_ENABLE_LIVE=false.
+   Tracing stays optional. Never copy secrets into frontend variables.
+4. Choose the intended Preview/Production environment and supported Python runtime
+   (local verification used 3.12). Keep existing build/entrypoint settings unless
+   a verified deployment error requires correction. Dependency pins are unchanged.
+5. After you choose to publish the reviewed code to the configured Git source,
+   deploy the intended revision through the existing Vercel project's workflow.
+   Environment edits require a new deployment. First verify a preview if available,
+   then promote the reviewed successful revision manually.
+6. GET deployed /openapi.json (0.6.1/four routes) and /api/health. Process the known
+   cached URL; expect real stored captions. An uncached URL should fail with
+   TRANSCRIPT_NOT_CACHED, without contacting YouTube. Verify a disallowed CORS origin.
+7. Only when you intend paid calls, ask one reviewed factual question, one absent
+   fact and a same-ID follow-up; compare source text/times with original captions.
+   Upload one short recording in Postman, review text, then submit through chat.
+   These live/semantic checks have **not** been performed by Day 5 automation.
+8. Observe safe errors/traces and provider usage. Revert to a known revision through
+   Vercel if verification fails; do not delete original transcripts/indexes.
+
+[Vercel's request payload ceiling](https://vercel.com/docs/functions/limitations)
+is 4.5 MB. Platform rejection may precede the app and use its own error envelope.
+Keep large indexing and summaries local; no paid proxy or background promise is
+required. Long recordings need a future separate upload/storage workflow.
+
+## Remaining limitations
+
+Real-video semantic accuracy, live ASR and production latency are **Not yet
+measured** by this stabilization run. Historical Day 3 live checks do not replace
+new measurements. Small-sample p95 and mocked timings are labeled explicitly.
+Native tool choice/general-language reference resolution remains model-dependent;
+numbered follow-up support is conservative. Raw retrieval thresholds need real
+calibration. Caption overlap retains full original text, not time-clipped phrases.
+
+The current API lacks authenticated ownership and durable paid-request quotas.
+Before broad public exposure, add an authorization/gateway strategy, per-user/IP
+quotas, concurrency protection and provider spend caps/alerts. CORS and an in-memory
+limiter cannot enforce distributed access/quotas. No such new system is introduced
+here. Summary semantic coverage, provider recognition and model claims require
+review; original-source checks alone are insufficient. See the linked audit and
+evaluation reports for actual evidence and unresolved measurement work.

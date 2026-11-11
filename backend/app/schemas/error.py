@@ -65,6 +65,7 @@ def error_responses(*statuses: int, video_processing: bool = False) -> dict:
     ])
     errors[409].append(("CONVERSATION_BUSY", "Another message is being processed in this conversation. Retry shortly."))
     errors[422].extend([
+        ("FOLLOWUP_CONTEXT_REQUIRED", "Please name the topic to explain; the available conversation does not identify that numbered point clearly."),
         ("INVALID_TIME_RANGE", "Use a valid interval within the configured retrieval window."),
         ("INVALID_TOOL_ARGUMENTS", "The transcript tool arguments are invalid."),
         ("SEGMENT_TOO_LARGE", "Request a smaller transcript interval."),

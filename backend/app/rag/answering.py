@@ -84,7 +84,10 @@ def retrieve_evidence(video, question: str):
         expected = plan.documents[chunk_index]
         if doc.page_content != expected.page_content or not metadata_matches(metadata, {key: value for key, value in expected.metadata.items() if key != "text"}):
             continue
-        if not isinstance(score, (int, float)) or not math.isfinite(score) or score < settings.min_score:
+        # describe_index enforces cosine. Its score is not a probability or an
+        # entailment verdict. Reject malformed scores before applying the user's
+        # existing configurable retrieval gate; do not recalibrate it blindly.
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or not -1.000001 <= score <= 1.000001 or score < settings.min_score:
             continue
         seen.add(chunk_index)
         expected.metadata["similarity_score"] = float(score)

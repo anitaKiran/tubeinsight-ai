@@ -1,1 +1,3 @@
-"""tubeInsight-ai backend: real captions and mock chat."""
+"""tubeInsight-ai backend: transcript tools, durable memory and audio questions."""
+
+__version__ = "0.6.1"
