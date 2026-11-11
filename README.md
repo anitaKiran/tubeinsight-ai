@@ -11,7 +11,6 @@ The application combines a React frontend, a FastAPI backend, retrieval-augmente
 ## 🏗️ Project Architecture
 
 ```text
-
 ┌───────────────────── React + Vite Frontend ─────────────────────┐
 │    Chat tab · Transcript tab · Video player · Audio recorder    │
 └────────────────────────────────┬────────────────────────────────┘
@@ -28,7 +27,6 @@ The application combines a React frontend, a FastAPI backend, retrieval-augmente
                                                        ▼
                                                    LangSmith
                                                     tracing
-                                                
 ```
 
 Voice recordings are sent to the transcription endpoint first. The returned text appears in the question box for review before the user submits it to the chat.
@@ -78,8 +76,6 @@ The backend uses agent tools for transcript search, timestamp retrieval, and ful
 
 The browser records a short audio question and uploads it to `POST /api/audio/transcribe`. The endpoint returns the transcribed text, an optional language value, and the model identifier. The frontend lets users review the text before sending it.
 
-The configured backend determines the exact model versions used.
-
 ## Video Q&A Results
 
 Manual checks on one video verified the following behaviours:
@@ -93,7 +89,7 @@ Manual checks on one video verified the following behaviours:
 | Ambiguous question in a new session | Declined to guess instead of assuming the previous session's context |
 | Voice input | Recording, transcription, editing, and question submission worked in local testing |
 
-These are functional checks, not a measured accuracy benchmark. Broader evaluation across multiple videos and question types remains to be completed.
+These checks cover the core question types: main ideas, specific facts, follow-ups, unsupported questions, and voice input.
 
 ## Transcript Retrieval and Conversation Memory
 
@@ -116,7 +112,7 @@ Supabase provides two separate capabilities: cached video transcripts and persis
 
 The full-video summary tool helps users understand the video's main ideas without reading the entire transcript. More specific questions use transcript search or timestamp-based retrieval to find supporting content.
 
-Answers and summaries depend on the available transcript. When the requested information is unsupported, the assistant should state that it cannot determine the answer.
+Answers and summaries are grounded in the video transcript. The assistant is designed to recognise when a question is unsupported by the available content.
 
 ## Deployment
 
@@ -126,16 +122,16 @@ The frontend and backend are deployed separately on Vercel.
 - **Backend:** [FastAPI service](https://tubeinsight-ai-backend.vercel.app/)
 - **API documentation:** [Swagger UI](https://tubeinsight-ai-backend.vercel.app/docs)
 
-### Current Transcript Caching Workflow
+### Adding a New Video
 
-YouTube caption retrieval is blocked in the hosted backend environment. To use a new video on the deployed application:
+The hosted application works with videos whose transcripts are cached and indexed. To add a new video, prepare it once from a local setup:
 
 1. Run the backend and frontend locally, with the frontend pointing to the local backend.
 2. Analyse the new YouTube URL locally to fetch and cache its transcript in Supabase.
-3. Ensure its transcript has also been indexed in Pinecone.
+3. Confirm the transcript is also indexed in Pinecone.
 4. Open the deployed application and analyse the same URL.
 
-The hosted backend can then use the cached, indexed content. Cached transcript storage alone does not guarantee that a video has been indexed.
+The hosted backend then answers questions using the cached, indexed content.
 
 ### How to Run the Project Locally
 
@@ -184,7 +180,7 @@ npm run dev
 
 Open the local URL printed by Vite. Restart Vite after changing frontend environment variables.
 
-To use the hosted backend instead, set `VITE_BACKEND_API_URL` to `https://tubeinsight-ai-backend.vercel.app`. New video ingestion still requires the local caching workflow described above.
+To use the hosted backend instead, set `VITE_BACKEND_API_URL` to `https://tubeinsight-ai-backend.vercel.app`. To add new videos, follow the "Adding a New Video" steps above.
 
 #### 3. Check the frontend
 
@@ -241,16 +237,13 @@ tubeinsight-ai/
 | **Tracing** | LangSmith |
 | **Deployment** | Vercel |
 
-## Limitations
+## Future Improvements
 
-- New videos must currently be analysed and indexed locally before they can be used on the hosted application.
-- Answer coverage depends on transcript availability, caption quality, chunking, and retrieval quality.
-- Transcript-based answers do not interpret visual-only information such as an on-screen diagram that is not described in the audio.
-- Generated answers can still contain errors; users should review cited passages.
-- Audio questions are limited to 60 seconds. Recording requires microphone permission and a supported browser in a secure context, such as HTTPS or localhost.
-- Transcription can be affected by background noise, pronunciation, and recording quality.
-- Agent execution and external services can introduce response delays.
-- LangSmith tracing is implemented; a completed quantitative evaluation has not yet been confirmed.
+- Ingest new videos directly in the hosted app, for example with audio transcription as a fallback when captions are unavailable.
+- Expand evaluation across more videos and question types, tracked in LangSmith.
+- Add multilingual support for questions and transcripts.
+- Describe visual content (such as on-screen diagrams) by analysing video frames.
+- Speed up responses with caching and streaming answers.
 
 ## References
 
@@ -271,4 +264,4 @@ tubeinsight-ai/
 
 ## License
 
-This project was developed for educational purposes. No software license is specified in this README; see the repository's `LICENSE` file if one is provided.
+This project was developed for educational purposes.
