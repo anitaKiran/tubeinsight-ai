@@ -16,6 +16,7 @@ import type {
   TranscriptSegment,
 } from "./types/api";
 import "./App.css";
+import "./Hero.css";
 
 type Message = {
   id: string;
@@ -62,6 +63,7 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>("chat");
 
+  const [videoFormOpen, setVideoFormOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [summary, setSummary] = useState<ChatResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -221,6 +223,7 @@ function App() {
       }
 
       setProcessedVideo(result);
+      setVideoFormOpen(false);
       setConnectionStatus("connected");
     } catch (requestError) {
       if (
@@ -333,6 +336,7 @@ function App() {
   }
 
   function handleReset() {
+    setVideoFormOpen(false);
     videoRequestRef.current?.abort();
     videoRequestRef.current = null;
     videoRequestIdRef.current += 1;
@@ -350,6 +354,19 @@ function App() {
       : connectionStatus === "connected"
         ? "Backend connected"
         : "Backend unavailable";
+
+  useEffect(() => {
+    if (!video) return;
+    const target = videoFormOpen ? "video-url" : "change-video-button";
+    document.getElementById(target)?.focus({ preventScroll: true });
+  }, [video, videoFormOpen]);
+
+  function toggleVideoForm() {
+    if (!video) return;
+    setVideoUrl(video.url);
+    setError("");
+    setVideoFormOpen((open) => !open);
+  }
 
   function sources(items: TranscriptSegment[], simulated = false) {
     if (!video || items.length === 0) return null;
@@ -407,8 +424,8 @@ function App() {
       </aside>
       {sidebarOpen && <button type="button" className="sidebar-backdrop" aria-label="Close menu" onClick={() => setSidebarOpen(false)} />}
 
-      <main className="main-content">
-        <header className="page-header">
+      <main className={`main-content${video && !videoFormOpen ? " is-compact" : ""}`}>
+        <header className="page-header" hidden={Boolean(video)}>
           <div>
             <p className="eyebrow">YOUR VIDEO LEARNING COMPANION</p>
             <h1>Your videos. Clearer answers.</h1>
@@ -417,7 +434,20 @@ function App() {
           <span className="preview-badge"><Icon name="spark" size={15} /> Video Q&amp;A</span>
         </header>
 
-        <section className="panel video-input-panel" aria-labelledby="video-input-heading">
+        {video && (
+          <div className="compact-video-bar" aria-label="Current video">
+            <span className="compact-video-icon"><Icon name="video" size={21} /></span>
+            <span className="compact-video-title" title={video.title ?? "Selected YouTube video"}>
+              {video.title ?? "Selected YouTube video"}
+            </span>
+            <button id="change-video-button" type="button" className="secondary-button change-video-button"
+              aria-expanded={videoFormOpen} aria-controls="video-input-panel" onClick={toggleVideoForm}>
+              {videoFormOpen ? "Cancel" : "Change video"}
+            </button>
+          </div>
+        )}
+
+        <section id="video-input-panel" className="panel video-input-panel" aria-labelledby="video-input-heading" hidden={Boolean(video) && !videoFormOpen}>
           <h2 id="video-input-heading">Start with a video</h2>
           <form onSubmit={handleLoadVideo}>
             <label htmlFor="video-url">YouTube video link</label>
@@ -521,6 +551,7 @@ function App() {
                   question={question} onQuestionChange={setQuestion} onSubmit={handleSendQuestion}
                   disabled={!video || isVideoLoading || isChatLoading} sending={isChatLoading} errorId={chatError ? "chat-error" : undefined} />}
                 {chatError && <p id="chat-error" className="error-text" role="alert">{chatError}</p>}
+                
               </div>
             </div>
 

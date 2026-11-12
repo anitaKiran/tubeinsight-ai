@@ -1,0 +1,50 @@
+/* Keep App.css and your chat customisations. This file only controls the hero. */
+.compact-video-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border, #e6e6eb);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 12px #20212703;
+}
+.compact-video-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--accent, #bf2534);
+}
+.compact-video-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink, #22232a);
+}
+.change-video-button {
+  flex-shrink: 0;
+  padding: 8px 13px;
+  white-space: nowrap;
+}
+.main-content.is-compact {
+  padding-top: 22px;
+  padding-bottom: 24px;
+}
+.is-compact .chat-panel {
+  height: max(560px, calc(100dvh - 124px));
+}
+@media (max-width: 850px) {
+  .is-compact .chat-panel { height: 700px; }
+}
+@media (max-width: 540px) {
+  .compact-video-bar { padding: 9px 11px; gap: 8px; }
+  .compact-video-title { font-size: 12px; }
+  .change-video-button { padding: 8px 10px; font-size: 11px; }
+  .is-compact .chat-panel { height: 650px; }
+}
