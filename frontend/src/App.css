@@ -340,3 +340,18 @@ h1 { font-size: clamp(27px, 2.5vw, 39px); letter-spacing: -.045em; line-height: 
   font-weight: 500;
   color: #62646e;
 }
+
+/* Match the chat height to the video panel on desktop */
+@media (min-width: 851px) {
+  .workspace-grid {
+    align-items: stretch;
+  }
+
+  .workspace-grid .chat-panel {
+    height: auto;
+    min-height: 660px;
+    max-height: none;
+    contain: size;
+    align-self: stretch;
+  }
+}
