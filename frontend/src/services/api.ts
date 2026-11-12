@@ -74,3 +74,13 @@ export function transcribeAudio(audio: Blob, signal?: AbortSignal) {
     method: "POST", body: form, signal,
   }, 90_000);
 }
+
+// Use the existing full-video summary capability through the agent endpoint.
+// A separate conversation keeps summary generation out of the user's chat.
+export function summarizeVideo(videoId: string, signal?: AbortSignal) {
+  return askQuestion({
+    video_id: videoId,
+    conversation_id: null,
+    question: "Use your full-video summary tool to summarise the entire video. Give a concise overview followed by 4 to 6 key takeaways. Cover the full transcript rather than only a few search results. Use clear headings and include timestamped sources when available. Ground the summary in this video only.",
+  }, signal);
+}

@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import AudioRecorder from "./components/AudioRecorder";
+import Icon from "./components/Icon";
+import AnswerText from "./components/AnswerText";
 import {
   ApiError,
   askQuestion,
   checkHealth,
   processVideo,
+  summarizeVideo,
 } from "./services/api";
 import type {
+  ChatResponse,
   ProcessVideoResponse,
   TranscriptSegment,
 } from "./types/api";
@@ -20,6 +24,9 @@ type Message = {
   sources?: TranscriptSegment[];
   mode?: "mock" | "real";
 };
+
+type Tab = "chat" | "transcript" | "summary";
+const tabs: Tab[] = ["chat", "transcript", "summary"];
 
 type ConnectionStatus = "checking" | "connected" | "unavailable";
 
@@ -53,7 +60,14 @@ function App() {
   const video = processedVideo?.video ?? null;
   const isMock = processedVideo?.mode === "mock";
 
-  const [activeTab, setActiveTab] = useState<"chat" | "transcript">("chat");
+  const [activeTab, setActiveTab] = useState<Tab>("chat");
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [summary, setSummary] = useState<ChatResponse | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
+  const summaryRequestRef = useRef<AbortController | null>(null);
+  const summaryRequestIdRef = useRef(0);
 
   const [recordingSession, setRecordingSession] = useState(0);
 
@@ -76,6 +90,7 @@ function App() {
       controller.abort();
       videoRequestRef.current?.abort();
       chatRequestRef.current?.abort();
+      summaryRequestRef.current?.abort();
     };
   }, []);
 
@@ -104,7 +119,66 @@ function App() {
     });
   }
 
+  function clearSummary() {
+    summaryRequestRef.current?.abort();
+    summaryRequestRef.current = null;
+    summaryRequestIdRef.current += 1;
+    setSummary(null);
+    setSummaryError("");
+    setSummaryLoading(false);
+  }
+
+  async function loadSummary() {
+    if (!video || isVideoLoading || summaryRequestRef.current || summary) return;
+    const controller = new AbortController();
+    const requestId = ++summaryRequestIdRef.current;
+    summaryRequestRef.current = controller;
+    setSummaryLoading(true);
+    setSummaryError("");
+    try {
+      const result = await summarizeVideo(video.id, controller.signal);
+      if (controller.signal.aborted || requestId !== summaryRequestIdRef.current) return;
+      if (!result.answer.trim()) throw new Error("No summary was returned. Please try again.");
+      setSummary(result);
+    } catch (requestError) {
+      if (controller.signal.aborted || requestId !== summaryRequestIdRef.current) return;
+      setSummaryError(requestError instanceof Error ? requestError.message : "Unable to generate the summary. Please try again.");
+    } finally {
+      if (requestId === summaryRequestIdRef.current) {
+        summaryRequestRef.current = null;
+        setSummaryLoading(false);
+      }
+    }
+  }
+
+  function openTab(tab: Tab) {
+    setActiveTab(tab);
+    if (tab === "summary") void loadSummary();
+  }
+
+  function suggestQuestion(text: string) {
+    // Reset a recorder in progress before filling the draft.
+    setRecordingSession((current) => current + 1);
+    setQuestion(text);
+    setChatError("");
+    setActiveTab("chat");
+    requestAnimationFrame(() => document.getElementById("question")?.focus());
+  }
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+        document.getElementById("sidebar-toggle")?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [sidebarOpen]);
+
   function resetChat() {
+    clearSummary();
     chatRequestRef.current?.abort();
     chatRequestRef.current = null;
     chatRequestIdRef.current += 1;
@@ -237,6 +311,7 @@ function App() {
             "This conversation has expired. Send your question again to start a new conversation.",
           );
         } else if (requestError.code === "VIDEO_NOT_FOUND") {
+          clearSummary();
           setProcessedVideo(null);
           setConversationId(null);
           setMessages([]);
@@ -276,398 +351,199 @@ function App() {
         ? "Backend connected"
         : "Backend unavailable";
 
+  function sources(items: TranscriptSegment[], simulated = false) {
+    if (!video || items.length === 0) return null;
+    return (
+      <div className="answer-sources">
+        <span className="sources-label">{simulated ? "Simulated sources" : "From the video"}</span>
+        {items.map((source, index) => (
+          <a className="source-card" key={`${source.start_seconds}-${index}`}
+            href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(source.start_seconds)}s`}
+            target="_blank" rel="noopener noreferrer"
+            onClick={(event) => {
+              if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              playAtTimestamp(source.start_seconds);
+            }}>
+            <span className="source-timestamp"><Icon name="play" size={13} />{formatTimestamp(source.start_seconds)}</span>
+            <span className="source-excerpt" title={source.text}>{source.text}</span>
+            <Icon name="arrow" size={15} />
+          </a>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="app-layout">
-      <aside className="sidebar">
-        <a className="brand" href="/" aria-label="tubeInsight AI home">
-          <span className="brand-icon" aria-hidden="true">▶</span>
-          <span>tubeInsight <strong>AI</strong></span>
+      <aside id="workspace-sidebar" className={`sidebar${sidebarOpen ? " is-open" : ""}`} aria-label="Workspace navigation">
+        <a className="brand" href="/" aria-label="TubeInsight AI home" title="TubeInsight AI">
+          <span className="brand-icon"><Icon name="play" size={24} /></span>
+          <span className="sidebar-detail">TubeInsight <strong>AI</strong></span>
         </a>
-
-        <p className="sidebar-description">
-          Turn video content into clear answers.
-        </p>
-
-        <button
-          className="new-session-button"
-          type="button"
-          onClick={handleReset}
-        >
-          + New session
+        <button id="sidebar-toggle" className="sidebar-toggle rail-action" type="button"
+          aria-expanded={sidebarOpen} aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+          aria-controls="sidebar-details" title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+          onClick={() => setSidebarOpen((open) => !open)}>
+          <Icon name={sidebarOpen ? "close" : "menu"} /><span className="sidebar-detail">Close menu</span>
         </button>
-
-        <div className="sidebar-section">
-          <p className="sidebar-label">YOUR WORKSPACE</p>
-          <div className="workspace-item">Video assistant</div>
+        <button className="new-session-button rail-action" type="button" title="New session"
+          aria-label="New session" onClick={() => { handleReset(); setSidebarOpen(false); }}>
+          <Icon name="plus" /><span className="sidebar-detail">New session</span>
+        </button>
+        <div id="sidebar-details" className="sidebar-description sidebar-detail" hidden={!sidebarOpen}>
+          Turn video content into clear answers.
         </div>
-
-        <div className="sidebar-footer" role="status">
-          <span
-            className="status-dot"
-            aria-hidden="true"
-            style={{
-              backgroundColor:
-                connectionStatus === "connected"
-                  ? "#287754"
-                  : connectionStatus === "checking"
-                    ? "#b7791f"
-                    : "#e53935",
-            }}
-          />
-          {connectionLabel}
+        <nav aria-label="Current workspace">
+          <a className="workspace-item rail-action" href="#workspace" aria-current="page" aria-label="Video assistant" title="Video assistant"
+            onClick={() => setSidebarOpen(false)}>
+            <Icon name="video" /><span className="sidebar-detail">Video assistant</span>
+          </a>
+        </nav>
+        <div className="sidebar-footer" role="status" title={connectionLabel}>
+          <span className={`status-dot status-${connectionStatus}`} aria-hidden="true" />
+          <span className={sidebarOpen ? "" : "sr-only"}>{connectionLabel}</span>
         </div>
       </aside>
+      {sidebarOpen && <button type="button" className="sidebar-backdrop" aria-label="Close menu" onClick={() => setSidebarOpen(false)} />}
 
       <main className="main-content">
         <header className="page-header">
           <div>
             <p className="eyebrow">YOUR VIDEO LEARNING COMPANION</p>
             <h1>Your videos. Clearer answers.</h1>
-            <p className="page-description">
-              Add a YouTube video, ask questions, and explore its key ideas.
-            </p>
+            <p className="page-description">Add a YouTube video, ask questions, and explore its key ideas.</p>
           </div>
-          <span className="preview-badge">Video Q&A</span>
+          <span className="preview-badge"><Icon name="spark" size={15} /> Video Q&amp;A</span>
         </header>
 
-        <section
-          className="panel video-input-panel"
-          aria-labelledby="video-input-heading"
-        >
+        <section className="panel video-input-panel" aria-labelledby="video-input-heading">
           <h2 id="video-input-heading">Start with a video</h2>
-
           <form onSubmit={handleLoadVideo}>
             <label htmlFor="video-url">YouTube video link</label>
-
             <div className="url-form-row">
-              <input
-                id="video-url"
-                type="url"
-                placeholder="https://www.youtube.com/watch?v=..."
-                value={videoUrl}
-                onChange={(event) => setVideoUrl(event.target.value)}
-                disabled={isVideoLoading}
-                aria-invalid={Boolean(error)}
-                aria-describedby={error ? "video-error" : "video-help"}
-                required
-              />
-              <button
-                className="primary-button"
-                type="submit"
-                disabled={isVideoLoading}
-                aria-busy={isVideoLoading}
-              >
-                {isVideoLoading ? (
-                  <>
-                    <span className="button-spinner" aria-hidden="true" />
-                    Analysing video…
-                  </>
-                ) : (
-                  "Analyse video"
-                )}
+              <div className="url-input-wrap">
+                <span className="url-play-icon"><Icon name="play" size={17} /></span>
+                <input id="video-url" type="url" placeholder="https://www.youtube.com/watch?v=..."
+                  value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)}
+                  disabled={isVideoLoading} aria-invalid={Boolean(error)}
+                  aria-describedby={error ? "video-error" : "video-help"} required />
+              </div>
+              <button className="primary-button" type="submit" disabled={isVideoLoading} aria-busy={isVideoLoading}>
+                {isVideoLoading ? <><span className="button-spinner" aria-hidden="true" />Analysing video…</> : "Analyse video"}
               </button>
             </div>
-
-            {error ? (
-              <p id="video-error" className="error-text" role="alert">
-                {error}
-              </p>
-            ) : (
-              <p id="video-help" className="helper-text">
-                Choose one video to start your learning session.
-              </p>
-            )}
+            {error ? <p id="video-error" className="error-text" role="alert">{error}</p>
+              : <p id="video-help" className="helper-text">Choose one video to start your learning session.</p>}
           </form>
         </section>
 
-        <div className="workspace-grid">
-          <section
-            className="panel video-panel"
-            aria-labelledby="video-heading"
-            aria-busy={isVideoLoading}
-          >
-            <div className="panel-heading">
-              <h2 id="video-heading">Your video</h2>
-              {video && (
-                <span className="selected-badge">
-                  {isMock ? "Demo ready" : "Ready"}
-                </span>
-              )}
+        <div id="workspace" className="workspace-grid">
+          <section className="panel video-panel" aria-labelledby="video-heading" aria-busy={isVideoLoading}>
+            <div className="video-heading-wrap">
+              <p className="section-eyebrow">YOUR VIDEO</p>
+              <h2 id="video-heading" className="video-title">{video?.title ?? (video ? "Untitled video" : "A little curiosity goes a long way")}</h2>
+              {video && <div className="video-meta">
+                {video.duration_seconds !== null && <span><Icon name="clock" size={16} />{formatTimestamp(video.duration_seconds)}{isMock ? " · simulated" : ""}</span>}
+                <span className="selected-badge"><span className="ready-dot" />{isMock ? "Demo ready" : "Transcript ready"}</span>
+                <a className="video-link" href={video.url} target="_blank" rel="noopener noreferrer">YouTube <Icon name="arrow" size={14} /></a>
+              </div>}
             </div>
-
-            {isVideoLoading ? (
-              <div className="empty-state" role="status">
-                <span className="empty-icon" aria-hidden="true">▶</span>
-                <h3>Processing your video</h3>
-                <p>Waiting for the backend response...</p>
+            {isMock && <p className="mock-notice" role="note">Mock / simulated content: the title, duration, transcript and answers are demo data. They do not describe the linked video.</p>}
+            {isVideoLoading ? <div className="empty-state video-empty" role="status">
+              <span className="chat-loading-spinner" aria-hidden="true" /><h3>Analysing your video</h3><p>Preparing the transcript for your questions.</p>
+            </div> : video ? <>
+              <div className="video-player-container">
+                <iframe ref={playerRef} key={video.id} className="video-player"
+                  src={`https://www.youtube.com/embed/${video.id}`} title={video.title ?? "Selected YouTube video"}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  referrerPolicy="strict-origin-when-cross-origin" allowFullScreen />
               </div>
-            ) : video && processedVideo ? (
-              <div className="selected-video">
-                {isMock && (
-                  <p className="mock-notice" role="note">
-                    Mock / simulated content: the title, duration,
-                    transcript, and answers are demo data. They do not
-                    describe the linked video. Demo timestamps are for
-                    interaction testing only.
-                  </p>
-                )}
+              <p className="playback-help">Playback unavailable? <a href={video.url} target="_blank" rel="noopener noreferrer">Watch on YouTube <Icon name="arrow" size={12} /></a></p>
+            </> : <div className="empty-state video-empty">
+              <span className="empty-icon"><Icon name="play" size={36} /></span><h3>Your next discovery starts here</h3><p>Paste a YouTube link above to select a video.</p>
+            </div>}
 
-                <div className="video-player-container">
-                  <iframe
-                    ref={playerRef}
-                    key={video.id}
-                    className="video-player"
-                    src={`https://www.youtube.com/embed/${video.id}`}
-                    title={video.title ?? "Selected YouTube video"}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    referrerPolicy="strict-origin-when-cross-origin"
-                    allowFullScreen
-                  />
-                </div>
-
-                <p className="helper-text">
-                  If playback is unavailable here, use the YouTube link below.
-                </p>
-
-                <h3 className="video-title">
-                  {video.title ?? "Untitled video"}
-                </h3>
-
-                {video.duration_seconds !== null && (
-                  <p className="helper-text">
-                    {isMock ? "Simulated duration" : "Duration"}:{" "}
-                    {formatTimestamp(video.duration_seconds)}
-                  </p>
-                )}
-
-                <a
-                  className="video-link"
-                  href={video.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Open actual video on YouTube ↗
-                </a>
+            <div className="explore-actions" aria-labelledby="explore-heading">
+              <h3 id="explore-heading"><Icon name="spark" size={18} /> Explore the key ideas</h3>
+              <div className="suggestion-buttons">
+                <button type="button" disabled={!video || isVideoLoading} onClick={() => openTab("summary")}>
+                  <Icon name="list" /><span>Summarise this video</span>
+                </button>
+                <button type="button" disabled={!video || isVideoLoading || isChatLoading}
+                  onClick={() => suggestQuestion("Explain the key concepts in this video in simple terms.")}>
+                  <Icon name="layers" /><span>Explain the key concepts</span>
+                </button>
+                <button type="button" disabled={!video || isVideoLoading || isChatLoading}
+                  onClick={() => suggestQuestion("What example does the speaker give to explain a main idea in this video?")}>
+                  <Icon name="bulb" /><span>Find an example</span>
+                </button>
               </div>
-            ) : (
-              <div className="empty-state">
-                <span className="empty-icon" aria-hidden="true">▶</span>
-                <h3>Your next discovery starts here</h3>
-                <p>Paste a YouTube link above to select a video.</p>
-              </div>
-            )}
+            </div>
           </section>
 
-          <section
-            className="panel chat-panel"
-            aria-labelledby="chat-heading"
-          >
-            <div className="panel-heading">
-              <h2 id="chat-heading">Explore this video</h2>
-              <h2 id="chat-heading">Ask tubeInsight</h2>
-              <span className="chat-label">Video Q&amp;A</span>
+          <section className="panel chat-panel" aria-labelledby="chat-heading">
+            <div className="chat-panel-header"><div><p className="section-eyebrow">YOUR LEARNING SPACE</p><h2 id="chat-heading">Ask TubeInsight</h2></div><span className="assistant-mark"><Icon name="spark" size={21} /></span></div>
+            <div className="workspace-tabs" role="tablist" aria-label="Video views"
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const index = tabs.indexOf(activeTab);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+                openTab(tabs[next]);
+                event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+              }}>
+              {tabs.map((tab) => <button key={tab} id={`${tab}-tab`} type="button" role="tab"
+                className={`workspace-tab${activeTab === tab ? " is-active" : ""}`} aria-selected={activeTab === tab}
+                aria-controls={`${tab}-view`} tabIndex={activeTab === tab ? 0 : -1} onClick={() => openTab(tab)}>
+                {tab === "chat" ? "Chat" : tab === "transcript" ? "Transcript" : "Summary"}
+              </button>)}
             </div>
+            {isMock && <p className="mock-notice" role="note">Answers and sources are simulated.</p>}
 
-            <div className="workspace-tabs" aria-label="Video views">
-              <button
-                type="button"
-                className={`workspace-tab ${activeTab === "chat" ? "is-active" : ""}`}
-                aria-pressed={activeTab === "chat"}
-                aria-controls="chat-view"
-                onClick={() => setActiveTab("chat")}
-              >
-                Chat
-              </button>
-
-              <button
-                type="button"
-                className={`workspace-tab ${activeTab === "transcript" ? "is-active" : ""}`}
-                aria-pressed={activeTab === "transcript"}
-                aria-controls="transcript-view"
-                onClick={() => setActiveTab("transcript")}
-              >
-                Transcript
-              </button>
-            </div>
-
-            {isMock && (
-              <p className="mock-notice" role="note">
-                Answers and sources are simulated. They do not describe
-                the linked video.
-              </p>
-            )}
-
-            <div
-              id="chat-view"
-              className="chat-view"
-              hidden={activeTab !== "chat"}
-            >
-              <div
-                className="messages"
-                role="log"
-                aria-label="Conversation"
-                aria-live="polite"
-              >
-                {messages.length === 0 ? (
-                  <div className="chat-empty-state">
-                    <span className="chat-symbol" aria-hidden="true">✦</span>
-                    <h3>Make the video make sense</h3>
-                    <p>
-                      {video
-                        ? "Ask a question about the selected video."
-                        : "Process a video to start asking questions."}
-                    </p>
-                  </div>
-                ) : (
-                  messages.map((message) => (
-                    <article
-                      key={message.id}
-                      className={`message message-${message.role}`}
-                    >
-                      <span className="message-author">
-                        {message.role === "user"
-                          ? "You"
-                          : message.mode === "mock"
-                            ? "tubeInsight AI · Simulated"
-                            : "tubeInsight AI"}
-                      </span>
-
-                      <p>{message.text}</p>
-
-                      {video &&
-                        message.sources &&
-                        message.sources.length > 0 && (
-                          <div className="answer-sources">
-                            <span className="sources-label">
-                              {message.mode === "mock"
-                                ? "Simulated sources"
-                                : "Sources"}
-                            </span>
-
-                            {message.sources.map((source, index) => (
-                              <a
-                                className="source-card"
-                                onClick={(event) => {
-                                  if (
-                                    event.ctrlKey ||
-                                    event.metaKey ||
-                                    event.shiftKey ||
-                                    event.altKey
-                                  ) {
-                                    return;
-                                  }
-                                  event.preventDefault();
-                                  playAtTimestamp(source.start_seconds);
-                                }}
-                                key={`${source.start_seconds}-${index}`}
-                                href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(source.start_seconds)}s`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                <span className="source-timestamp">
-                                  ▶ {formatTimestamp(source.start_seconds)}
-                                </span>
-                                <span>{source.text}</span>
-                              </a>
-                            ))}
-                          </div>
-                        )}
-                    </article>
-                  ))
-                )}
-
+            <div id="chat-view" role="tabpanel" aria-labelledby="chat-tab" className="chat-view" hidden={activeTab !== "chat"}>
+              <div className="messages" role="log" aria-label="Conversation" aria-live="polite">
+                {messages.length === 0 ? <div className="chat-empty-state">
+                  <span className="chat-symbol"><Icon name="spark" size={30} /></span><h3>Make the video make sense</h3>
+                  <p>{video ? "Ask a question, follow an idea, or try a prompt below the video." : "Analyse a video to start asking questions."}</p>
+                </div> : messages.map((message) => <article key={message.id} className={`message message-${message.role}`}>
+                  <span className="message-author">{message.role === "user" ? "You" : <><span className="answer-avatar"><Icon name="play" size={13} /></span>{message.mode === "mock" ? "TubeInsight AI · Simulated" : "TubeInsight AI"}</>}</span>
+                  <div className="message-body"><AnswerText text={message.text} /></div>
+                  {message.sources && sources(message.sources, message.mode === "mock")}
+                </article>)}
                 <div ref={messagesEndRef} />
               </div>
-
-              {isChatLoading && (
-                <div className="chat-loading" role="status" aria-live="polite">
-                  <span className="chat-loading-spinner" aria-hidden="true" />
-                  <div>
-                    <p className="chat-loading-title">Preparing your answer…</p>
-                    <p className="chat-loading-description">
-                      This may take a few moments.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              <AudioRecorder
-                key={`${recordingSession}-${video?.id ?? "none"}-${isChatLoading}-${isVideoLoading}`}
-                question={question}
-                onQuestionChange={setQuestion}
-                onSubmit={handleSendQuestion}
-                disabled={!video || isVideoLoading || isChatLoading}
-                sending={isChatLoading}
-                errorId={chatError ? "chat-error" : undefined}
-              />
-
-              <p className="chat-disclaimer">
-                Check the sources when reviewing an answer.
-              </p>
+              {isChatLoading && <div className="chat-loading" role="status" aria-live="polite">
+                <span className="chat-loading-spinner" aria-hidden="true" /><div><p className="chat-loading-title">Preparing your answer…</p><p className="chat-loading-description">Finding the relevant video content.</p></div>
+              </div>}
+              <div className="composer-area">
+                {activeTab === "chat" && <AudioRecorder key={`${recordingSession}-${video?.id ?? "none"}-${isChatLoading}-${isVideoLoading}`}
+                  question={question} onQuestionChange={setQuestion} onSubmit={handleSendQuestion}
+                  disabled={!video || isVideoLoading || isChatLoading} sending={isChatLoading} errorId={chatError ? "chat-error" : undefined} />}
+                {chatError && <p id="chat-error" className="error-text" role="alert">{chatError}</p>}
+              </div>
             </div>
 
-            <div
-              id="transcript-view"
-              className="transcript-view"
-              hidden={activeTab !== "transcript"}
-            >
-              {!video || !processedVideo ? (
-                <div className="chat-empty-state">
-                  <h3>No transcript yet</h3>
-                  <p>Analyse a video to view its transcript.</p>
-                </div>
-              ) : processedVideo.transcript.length === 0 ? (
-                <div className="chat-empty-state">
-                  <h3>Transcript unavailable</h3>
-                  <p>No transcript segments were returned for this video.</p>
-                </div>
-              ) : (
-                <>
-                  <p className="helper-text">
-                    {processedVideo.transcript.length} transcript segments.
-                    Select a timestamp to play that moment in the video above.
-                  </p>
-
-                  <div className="transcript-list">
-                    {processedVideo.transcript.map((segment, index) => (
-                      <div
-                        className="transcript-segment"
-                        key={`${segment.start_seconds}-${index}`}
-                      >
-                        <a
-                          onClick={(event) => {
-                            if (
-                              event.ctrlKey ||
-                              event.metaKey ||
-                              event.shiftKey ||
-                              event.altKey
-                            ) {
-                              return;
-                            }
-                            event.preventDefault();
-                            playAtTimestamp(segment.start_seconds);
-                          }}
-                          href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(
-                            segment.start_seconds,
-                          )}s`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`Open video at ${formatTimestamp(
-                            segment.start_seconds,
-                          )}${isMock ? "; simulated timestamp" : ""}`}
-                        >
-                          {formatTimestamp(segment.start_seconds)}
-                        </a>
-
-                        <p>{segment.text}</p>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
+            <div id="transcript-view" role="tabpanel" aria-labelledby="transcript-tab" className="transcript-view" hidden={activeTab !== "transcript"} tabIndex={0}>
+              {!video || !processedVideo ? <div className="chat-empty-state"><span className="chat-symbol"><Icon name="list" size={28} /></span><h3>No transcript yet</h3><p>Analyse a video to explore its transcript.</p></div>
+                : processedVideo.transcript.length === 0 ? <div className="chat-empty-state"><h3>Transcript unavailable</h3><p>No transcript segments were returned for this video.</p></div>
+                : <><div className="view-intro"><h3>The full conversation, in context</h3><p>{processedVideo.transcript.length} segments. Select a timestamp to play that moment.</p></div>
+                  <div className="transcript-list">{processedVideo.transcript.map((segment, index) => <div className="transcript-segment" key={`${segment.start_seconds}-${index}`}>
+                    <a href={`https://www.youtube.com/watch?v=${video.id}&t=${Math.floor(segment.start_seconds)}s`} target="_blank" rel="noopener noreferrer"
+                      aria-label={`Play at ${formatTimestamp(segment.start_seconds)}${isMock ? "; simulated timestamp" : ""}`}
+                      onClick={(event) => { if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); playAtTimestamp(segment.start_seconds); }}>
+                      {formatTimestamp(segment.start_seconds)}
+                    </a><p>{segment.text}</p>
+                  </div>)}</div></>}
             </div>
 
-
+            <div id="summary-view" role="tabpanel" aria-labelledby="summary-tab" className="summary-view" hidden={activeTab !== "summary"} tabIndex={0} aria-busy={summaryLoading}>
+              {!video ? <div className="chat-empty-state"><span className="chat-symbol"><Icon name="layers" size={28} /></span><h3>The big picture</h3><p>Analyse a video to generate its overview and key takeaways.</p></div>
+                : summaryLoading ? <div className="summary-loading" role="status"><span className="chat-loading-spinner" aria-hidden="true" /><h3>Putting the ideas together…</h3><p>Preparing an overview of the full video.</p></div>
+                : summaryError ? <div className="summary-error"><h3>Let’s try that again</h3><p className="error-text" role="alert">{summaryError}</p><button type="button" className="secondary-button" onClick={() => void loadSummary()}>Retry summary</button></div>
+                : summary ? <><div className="view-intro"><span className="summary-symbol"><Icon name="layers" size={20} /></span><h3>Your video, at a glance</h3><p>An overview of the full video and the ideas to take away.</p></div><AnswerText text={summary.answer} />{sources(summary.sources)}<p className="summary-footnote">Generated from the video transcript. Review the sources for context.</p></>
+                : <div className="chat-empty-state"><h3>Your video, at a glance</h3><button type="button" className="secondary-button" disabled={isVideoLoading} onClick={() => void loadSummary()}>Generate summary</button></div>}
+            </div>
           </section>
         </div>
       </main>
