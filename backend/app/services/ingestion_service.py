@@ -8,6 +8,8 @@ from app.repositories import video_repository
 from app.schemas.error import ApiException
 from app.schemas.stored_video import StoredVideo
 from app.services import youtube_transcript_service
+from app.services import youtube_metadata_service
+from app.services.metadata_enrichment import enrich_cached_video
 from app.services.youtube_url import extract_video_id
 from app.runtime import require_local_extraction
 
@@ -28,16 +30,25 @@ def ingest_video(url: str, *, force: bool = False) -> IngestionResult:
             raise
         existing = None
     if existing is not None and not force:
-        return IngestionResult(video=existing, cached=True)
+        return IngestionResult(video=enrich_cached_video(existing), cached=True)
     # Failed extraction/validation never reaches the atomic upsert. The previous
     # row stays intact on --force failures; there is no delete-then-insert step.
     captions = youtube_transcript_service.fetch_transcript_data(video_id)
     try:
         record = StoredVideo(
             video_id=video_id, url=f"https://www.youtube.com/watch?v={video_id}",
-            thumbnail_url=f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+            title=existing.title if existing else None,
+            thumbnail_url=existing.thumbnail_url if existing else None,
+            duration_seconds=existing.duration_seconds if existing else None,
             language=captions.language, transcript=captions.segments,
         )
     except ValidationError:
         raise ApiException(422, "VALIDATION_ERROR", "Cannot save an empty or invalid transcript.") from None
+    if youtube_metadata_service.missing(record.title):
+        metadata=youtube_metadata_service.fetch_metadata(video_id)
+        if metadata is not None:
+            record=record.model_copy(update={"title":metadata.title,
+                "thumbnail_url":metadata.thumbnail_url if youtube_metadata_service.missing(record.thumbnail_url) else record.thumbnail_url})
+    if youtube_metadata_service.missing(record.thumbnail_url):
+        record=record.model_copy(update={"thumbnail_url":f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"})
     return IngestionResult(video=video_repository.upsert_video(record), cached=False)
