@@ -1,7 +1,7 @@
 # tubeInsight-ai backend
 
 Rayhan builds the Python/FastAPI backend; Anita Kiran owns React. This README
-reproduces backend **0.6.1**. No frontend changes are needed for stabilization.
+reproduces backend **0.6.2**. No frontend changes are needed for stabilization.
 The API serves original YouTube transcripts, video-bound tools and persistent
 chat, plus a backend-only recorded-question transcription endpoint.
 
@@ -66,7 +66,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 [Swagger](http://localhost:8000/docs) · [OpenAPI](http://localhost:8000/openapi.json).
-The OpenAPI version should be 0.6.1. Health is connectivity-only and preserves its
+The OpenAPI version should be 0.6.2. Health is connectivity-only and preserves its
 legacy service/mode strings; it is not a live database/model readiness test.
 
 ## Backend environment
@@ -308,7 +308,7 @@ Do not modify Anita's frontend project to deploy this backend.
    deploy the intended revision through the existing Vercel project's workflow.
    Environment edits require a new deployment. First verify a preview if available,
    then promote the reviewed successful revision manually.
-6. GET deployed /openapi.json (0.6.1/four routes) and /api/health. Process the known
+6. GET deployed /openapi.json (0.6.2/four routes) and /api/health. Process the known
    cached URL; expect real stored captions. An uncached URL should fail with
    TRANSCRIPT_NOT_CACHED, without contacting YouTube. Verify a disallowed CORS origin.
 7. Only when you intend paid calls, ask one reviewed factual question, one absent
@@ -339,3 +339,91 @@ limiter cannot enforce distributed access/quotas. No such new system is introduc
 here. Summary semantic coverage, provider recognition and model claims require
 review; original-source checks alone are insufficient. See the linked audit and
 evaluation reports for actual evidence and unresolved measurement work.
+
+
+## Real video titles and safe metadata backfill (0.6.2)
+
+New local ingestion fetches title/optional thumbnail from the fixed YouTube
+[oEmbed endpoint](https://www.youtube.com/oembed), using the canonical validated
+video ID. The verified title is saved alongside captions before a successful
+response. No transcript-derived or fabricated title is used. No API key or new
+dependency is required. A forced caption refresh preserves existing title,
+thumbnail and duration instead of resetting them.
+
+Cached records with null/blank/missing titles attempt one bounded metadata lookup,
+then conditionally PATCH only missing title/thumbnail fields. They do not re-fetch
+captions, upsert/recreate the row, alter conversation/summary data, or change the
+transcript indexing fingerprint. An already-present title skips metadata entirely.
+The existing local process route still checks indexing readiness as before; valid
+manifests skip embedding. The metadata repair/backfill itself never invokes indexing.
+
+Each PATCH compares the field with the previously read null/blank value, protecting
+concurrent nonempty metadata. A readback confirms stored state before returning
+an enriched response. Provider or metadata-write failure leaves valid captions
+usable and the original nullable title intact in the response; a safe warning
+records failure rather than claiming an unsaved title succeeded. Retry a missing
+title later. Existing nonempty titles/thumbnails are preserved, even if YouTube
+has subsequently renamed the public video; this is repair, not forced metadata refresh.
+
+Optional backend configuration (defaults work without adding these to private .env):
+
+```dotenv
+YOUTUBE_METADATA_ENABLED=true
+YOUTUBE_METADATA_TIMEOUT_SECONDS=4
+```
+
+One provider attempt, no retries/redirects, at most 64 KB JSON, fixed HTTPS endpoint
+and strict ID/title/provider/container validation. Thumbnail URLs are restricted
+to known YouTube image hosts/paths and are not fetched by the backend. Environment
+proxies are ignored. Timeout accepts 1–10 seconds and applies to provider socket
+operations, not a hard process-kill deadline. No API key, authorization header,
+raw provider response or exception URL is logged.
+
+### Repair old rows manually in Windows PowerShell
+
+From the repository root, using the configured backend .env:
+
+```powershell
+Set-Location backend
+.\.venv\Scripts\python.exe -m app.scripts.backfill_video_metadata --dry-run --limit 100
+.\.venv\Scripts\python.exe -m app.scripts.backfill_video_metadata --apply --limit 100
+```
+
+Dry-run is also the default and only lists candidates: no metadata HTTP requests
+or database writes. `--apply` is the deliberate metadata-write mode. The row-scan
+limit includes already-titled skips, not just missing-title attempts; it is bounded
+to 1–500. Only small metadata columns are scanned in keyset pages. Each candidate
+is re-read before writing; no captions are extracted or replaced. Default delay
+between metadata attempts is 0.5s (configurable 0.25–5), with no provider retries.
+A failed candidate logs a safe failure, continues, and makes the CLI exit nonzero.
+
+For one known saved video:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.scripts.backfill_video_metadata --apply --video-id t9MJ1gxcJ4w
+```
+
+To continue beyond a scan limit, pass `--after-video-id LAST_SCANNED_ID` using the
+last ID printed by the previous run. Do not use `--force` transcript ingestion to
+repair metadata. There is no startup backfill, automatic bulk run, deletion or
+migration. Existing videos and their dependent records stay in place.
+
+### Production limitation and verification
+
+Metadata lookup is distinct from caption extraction and can run for cached rows
+under production policy; direct captions remain prohibited on Vercel. oEmbed was
+verified **from local development**, not from this project's deployed Vercel IPs.
+No deployment was performed, and reliable production provider reachability is not
+claimed. A local production-policy test does not establish Vercel networking.
+
+If Vercel blocks metadata or you want no metadata outbound calls there, set
+YOUTUBE_METADATA_ENABLED=false in that backend environment, run the local backfill
+against the same Supabase project, verify dry-run candidates/saved titles, then
+manually redeploy. Production reuses those persistent titles without a provider
+request. Private/deleted/restricted videos, embedding-disabled videos, rate limits
+or malformed/provider failures can leave titles null; successful transcripts
+still return as before. The official YouTube Data API fallback was considered but
+not added: the working keyless source avoids a new key/quota dependency. It remains
+a future option if oEmbed is insufficient for the intended deployment.
+
+See [title-fix implementation and actual live results](../docs/video-title-fix.md).

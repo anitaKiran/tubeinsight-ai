@@ -40,7 +40,7 @@ def test_force_refresh_uses_actual_caption_language(saved_videos, make_record, c
     assert result.cached is False
     assert result.video.language == "de"
     assert saved_videos[VIDEO_ID].language == "de"
-    assert result.video.title is None
+    assert result.video.title == "Old title"  # Transcript refresh preserves metadata.
 
 
 @pytest.mark.parametrize("error", [TranscriptsDisabled(VIDEO_ID), Timeout("secret"), RequestBlocked(VIDEO_ID)])

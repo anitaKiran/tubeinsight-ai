@@ -20,6 +20,7 @@ def isolated_caption_environment(monkeypatch, request):
     if request.node.get_closest_marker("integration"):
         return
     # Empty values prevent load_dotenv from reintroducing private configuration.
+    monkeypatch.setenv("YOUTUBE_METADATA_ENABLED", "false")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGSMITH_API_KEY", "")
     for key in ["OPENAI_API_KEY", "PINECONE_API_KEY"]:
