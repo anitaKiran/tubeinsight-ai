@@ -5,6 +5,7 @@ from app.schemas.video import VideoMetadata, VideoProcessResponse
 from app.runtime import get_transcript_source, is_cache_only_runtime
 from app.rag.indexing import ensure_indexed
 from app.services import ingestion_service
+from app.services.metadata_enrichment import enrich_cached_video
 from app.services.youtube_url import extract_video_id
 from app.repositories import video_repository
 from app.schemas.stored_video import StoredVideo
@@ -34,6 +35,8 @@ def process_video(url: str) -> VideoProcessResponse:
         record = video_repository.get_video(video_id)
     if record is None:
         raise ApiException(404, "TRANSCRIPT_NOT_CACHED", "This video has not been prepared yet.")
+    if source != "auto":
+        record=enrich_cached_video(record)
     if not is_cache_only_runtime():
         ensure_indexed(record)
     return video_response(record)
