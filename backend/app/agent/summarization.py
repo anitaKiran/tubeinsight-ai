@@ -1,6 +1,7 @@
 """Complete-coverage, bounded map/reduce summaries cached in Supabase."""
 import hashlib
 import json
+import math
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -20,10 +21,19 @@ list. Set supported=false if material is insufficient. Otherwise cite only suppl
 evidence_id numbers in source_ids. Do not invent quotes, numbers, or timestamps."""
 
 
+def valid_cached_source(source, expected):
+    if not isinstance(source, dict) or not isinstance(source.get("text"), str):
+        return False
+    times = (source.get("start_seconds"), source.get("end_seconds"))
+    if any(isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) for t in times):
+        return False
+    return (source["text"], *times) in expected
+
+
 def summarize(video, ledger, settings, rag_settings, budget, model, *, detail="brief", start=None, end=None, focus=""):
     if start is None and end is not None:
         raise ApiException(422, "INVALID_TIME_RANGE", "A summary interval requires a start timestamp.")
-    segments = video.transcript if start is None else select_range(video, start, end, settings)
+    segments = sorted(video.transcript, key=lambda s: (s.start_seconds, s.end_seconds)) if start is None else select_range(video, start, end, settings)
     if not segments:
         return {"summary": INSUFFICIENT_EVIDENCE, "results": [], "empty": True}
     plan = build_plan(video.model_copy(update={"transcript": segments}), rag_settings)
@@ -35,7 +45,7 @@ def summarize(video, ledger, settings, rag_settings, budget, model, *, detail="b
     expected = {(doc.page_content, doc.metadata["start_seconds"], doc.metadata["end_seconds"]) for doc in plan.documents}
     if cached is not None:
         if not isinstance(cached, dict) or not isinstance(cached.get("answer"), str) or not cached["answer"].strip() or not isinstance(cached.get("sources"), list) or not cached["sources"] or any(
-            not isinstance(s, dict) or (s.get("text"), s.get("start_seconds"), s.get("end_seconds")) not in expected for s in cached["sources"]):
+            not valid_cached_source(s, expected) for s in cached["sources"]):
             raise ApiException(502, "INVALID_SUMMARY_CACHE", "The saved summary has invalid source references. Recompute it locally.")
         rows = [ledger.add(s["text"], s["start_seconds"], s["end_seconds"]) for s in cached["sources"]]
         return {"summary": cached["answer"], "results": rows, "coverage": "complete", "cached": True}

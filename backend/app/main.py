@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
 
+from app import __version__
 from app.routers import audio, chat, health, videos
 from app.audio_upload import AudioUploadLimitMiddleware
 from app.schemas.error import ApiError, ApiException, ErrorResponse
@@ -53,7 +54,7 @@ def create_app() -> CORSMiddleware:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     api = FastAPI(
         title="tubeInsight-ai API",
-        version="0.6.0",
+        version=__version__,
         description=(
             "Supabase-first captions with automatic local extraction in auto mode. "
             "Production and Vercel use saved captions only. Chat uses video-bound tools and persistent Supabase session memory."

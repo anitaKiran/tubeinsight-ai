@@ -38,6 +38,7 @@ def select_range(video, start, end, settings):
         start, end = max(0, start - settings.point_window / 2), start + settings.point_window / 2
     if end <= start or end - start > settings.max_window:
         raise ApiException(422, "INVALID_TIME_RANGE", "Use an increasing, non-negative interval within TRANSCRIPT_MAX_WINDOW_SECONDS.")
-    selected = [s for s in video.transcript if s.end_seconds >= start and s.start_seconds < end]
+    # Half-open intervals: a caption ending exactly at start is outside.
+    selected = [s for s in video.transcript if s.end_seconds > start and s.start_seconds < end]
     selected.sort(key=lambda s: (s.start_seconds, s.end_seconds))
     return selected

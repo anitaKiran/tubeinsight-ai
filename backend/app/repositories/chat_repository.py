@@ -40,8 +40,10 @@ def get_history(claim, max_messages, max_chars):
     with get_supabase_client() as client:
         rows = execute(client.table("chat_messages").select("role,content,sequence_number").eq("session_id", str(claim.session_id)).order("sequence_number", desc=True).limit(max_messages))
     selected, size = [], 0
+    if not isinstance(rows, list):
+        raise ApiException(502, "INVALID_CHAT_HISTORY", "The saved conversation is invalid.")
     for row in rows:
-        if row["role"] not in {"user", "assistant"}:
+        if not isinstance(row, dict) or row.get("role") not in {"user", "assistant"} or not isinstance(row.get("content"), str) or not row["content"].strip():
             raise ApiException(502, "INVALID_CHAT_HISTORY", "The saved conversation is invalid.")
         if size + len(row["content"]) > max_chars:
             break
