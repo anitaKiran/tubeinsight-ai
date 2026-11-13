@@ -36,7 +36,31 @@ function formatTimestamp(seconds: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+type SavedVideo = { id: string; title: string };
+const SAVED_VIDEOS_KEY = "tubeinsight.saved-videos.v1";
+
+function readSavedVideos(): SavedVideo[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(SAVED_VIDEOS_KEY) ?? "[]");
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    return value.filter((item): item is SavedVideo => {
+      if (!item || typeof item !== "object" || typeof item.id !== "string" ||
+          !/^[a-zA-Z0-9_-]{11}$/.test(item.id) || typeof item.title !== "string" ||
+          !item.title.trim() || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    }).map(({ id, title }) => ({ id, title: title.slice(0, 160) }));
+  } catch {
+    return [];
+  }
+}
+
 function App() {
+  const [savedVideos, setSavedVideos] = useState<SavedVideo[]>(readSavedVideos);
+  const [savedNotice, setSavedNotice] = useState("");
+  const [savedError, setSavedError] = useState("");
+  const savedListRef = useRef<HTMLDivElement | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [processedVideo, setProcessedVideo] =
     useState<ProcessVideoResponse | null>(null);
@@ -197,8 +221,10 @@ function App() {
   async function handleLoadVideo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const url = videoUrl.trim();
+    await loadVideo(videoUrl.trim());
+  }
 
+  async function loadVideo(url: string) {
     if (!url || videoRequestRef.current) {
       return;
     }
@@ -335,6 +361,56 @@ function App() {
     }
   }
 
+  function updateSavedVideos(next: SavedVideo[]): boolean {
+    try {
+      localStorage.setItem(SAVED_VIDEOS_KEY, JSON.stringify(next));
+      setSavedVideos(next);
+      setSavedError("");
+      return true;
+    } catch {
+      setSavedNotice("");
+      setSavedError("Your browser could not save this change. Check that site storage is allowed.");
+      setSidebarOpen(true);
+      return false;
+    }
+  }
+
+  function saveCurrentVideo() {
+    if (!video || isVideoLoading || isMock) return;
+    if (savedVideos.some((item) => item.id === video.id)) {
+      setSidebarOpen(true);
+      return;
+    }
+    const name = window.prompt("Name this saved video:", video.title?.trim() || `YouTube video ${video.id}`);
+    if (name === null) return;
+    const title = name.trim().slice(0, 160);
+    if (!title) return;
+    if (updateSavedVideos([{ id: video.id, title }, ...savedVideos])) {
+      setSavedNotice("Video saved.");
+      setSidebarOpen(true);
+    }
+  }
+
+  function renameSavedVideo(item: SavedVideo) {
+    const name = window.prompt("Rename saved video:", item.title);
+    if (name === null || !name.trim()) return;
+    if (updateSavedVideos(savedVideos.map((entry) => entry.id === item.id
+      ? { ...entry, title: name.trim().slice(0, 160) } : entry))) setSavedNotice("Video renamed.");
+  }
+
+  function removeSavedVideo(id: string) {
+    if (updateSavedVideos(savedVideos.filter((item) => item.id !== id))) setSavedNotice("Video removed from saved videos.");
+  }
+
+  function openSavedVideo(item: SavedVideo) {
+    if (videoRequestRef.current) return;
+    setSavedNotice("");
+    setSidebarOpen(false);
+    const url = `https://www.youtube.com/watch?v=${item.id}`;
+    setVideoUrl(url);
+    void loadVideo(url);
+  }
+
   function handleReset() {
     setVideoFormOpen(false);
     videoRequestRef.current?.abort();
@@ -417,6 +493,30 @@ function App() {
             <Icon name="video" /><span className="sidebar-detail">Video assistant</span>
           </a>
         </nav>
+        <button className="rail-action saved-nav-button" type="button" title="Saved videos"
+          aria-label={`Saved videos (${savedVideos.length})`} onClick={() => {
+            setSidebarOpen(true);
+            requestAnimationFrame(() => savedListRef.current?.focus());
+          }}>
+          <span className="saved-nav-icon" aria-hidden="true">♡</span>
+          <span className="sidebar-detail">Saved videos ({savedVideos.length})</span>
+        </button>
+        {sidebarOpen && <div className="saved-videos-list" ref={savedListRef} tabIndex={-1} aria-label="Saved videos">
+          <p className="saved-browser-note">Saved in this browser.</p>
+          {savedVideos.length === 0 && <p className="saved-empty">Save a video to find it here later.</p>}
+          {savedVideos.map((item) => <div className="saved-video-item" key={item.id}>
+            <button className="saved-video-open" type="button" disabled={isVideoLoading}
+              onClick={() => openSavedVideo(item)} title={item.title}>
+              <Icon name="video" size={17} /><span>{item.title}</span>
+            </button>
+            <div className="saved-video-actions">
+              <button type="button" onClick={() => renameSavedVideo(item)} aria-label={`Rename ${item.title}`}>Rename</button>
+              <button type="button" onClick={() => removeSavedVideo(item.id)} aria-label={`Remove ${item.title}`}>Remove</button>
+            </div>
+          </div>)}
+          <p className="saved-notice" role="status">{savedNotice}</p>
+          {savedError && <p className="saved-storage-error" role="alert">{savedError}</p>}
+        </div>}
         <div className="sidebar-footer" role="status" title={connectionLabel}>
           <span className={`status-dot status-${connectionStatus}`} aria-hidden="true" />
           <span className={sidebarOpen ? "" : "sr-only"}>{connectionLabel}</span>
@@ -440,6 +540,11 @@ function App() {
             <span className="compact-video-title" title={video.title ?? "Selected YouTube video"}>
               {video.title ?? "Selected YouTube video"}
             </span>
+            {!isMock && <button type="button" className="secondary-button save-video-button"
+              onClick={saveCurrentVideo} disabled={isVideoLoading}
+              aria-label={savedVideos.some((item) => item.id === video.id) ? "Open saved videos" : "Save video"}>
+              {savedVideos.some((item) => item.id === video.id) ? "Saved ✓" : "Save video"}
+            </button>}
             <button id="change-video-button" type="button" className="secondary-button change-video-button"
               aria-expanded={videoFormOpen} aria-controls="video-input-panel" onClick={toggleVideoForm}>
               {videoFormOpen ? "Cancel" : "Change video"}
